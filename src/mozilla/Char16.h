@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* Implements a UTF-16 character type. */
+
 #ifndef mozilla_Char16_h
 #define mozilla_Char16_h
 
