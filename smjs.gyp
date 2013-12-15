@@ -134,7 +134,7 @@
             },
           }
         }, {
-          'cflags': ['-pthread'],
+          'cflags': ['-pthread', '-std=c++0x', '-Wno-invalid-offsetof'],
           'defines': ['XP_UNIX=1'],
           'libraries': ['-pthread'],
         }],
