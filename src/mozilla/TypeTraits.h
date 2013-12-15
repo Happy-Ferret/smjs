@@ -16,6 +16,7 @@
  */
 
 #include <wchar.h>
+#include "Char16.h"
 
 namespace mozilla {
 
