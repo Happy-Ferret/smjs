@@ -13,19 +13,21 @@ if /i "%1"=="/?" goto help
 
 @rem Process arguments.
 set config=Debug
+set platform=WIN32
 set target=Build
 set target_arch=ia32
-set noprojgen=
+set vs_toolset=x86
 set nobuild=
+set noprojgen=
 
 :next-arg
 if "%1"=="" goto args-done
 if /i "%1"=="debug"         set config=Debug&goto arg-ok
 if /i "%1"=="release"       set config=Release&goto arg-ok
 if /i "%1"=="clean"         set target=Clean&goto arg-ok
-if /i "%1"=="ia32"          set target_arch=ia32&goto arg-ok
-if /i "%1"=="x86"           set target_arch=ia32&goto arg-ok
-if /i "%1"=="x64"           set target_arch=x64&goto arg-ok
+if /i "%1"=="x86"           set target_arch=ia32&set platform=WIN32&set vs_toolset=x86&goto arg-ok
+if /i "%1"=="ia32"          set target_arch=ia32&set platform=WIN32&set vs_toolset=x86&goto arg-ok
+if /i "%1"=="x64"           set target_arch=x64&set platform=amd64&set vs_toolset=x64&goto arg-ok
 if /i "%1"=="noprojgen"     set noprojgen=1&goto arg-ok
 if /i "%1"=="nobuild"       set nobuild=1&goto arg-ok
 
@@ -67,8 +69,9 @@ if defined nobuild goto run
 if defined VCINSTALLDIR goto msbuild-found
 if not defined VS100COMNTOOLS goto msbuild-not-found
 if not exist "%VS100COMNTOOLS%\..\..\vc\vcvarsall.bat" goto msbuild-not-found
-call "%VS100COMNTOOLS%\..\..\vc\vcvarsall.bat"
+call "%VS100COMNTOOLS%\..\..\vc\vcvarsall.bat" %vs_toolset%
 if not defined VCINSTALLDIR goto msbuild-not-found
+set GYP_MSVS_VERSION=2010
 goto msbuild-found
 
 :msbuild-not-found
@@ -77,7 +80,7 @@ goto run
 
 :msbuild-found
 @rem Build the sln with msbuild.
-msbuild smjs.sln /m /t:%target% /p:Configuration=%config% /clp:NoSummary;NoItemAndPropertyList;Verbosity=minimal /nologo
+msbuild smjs.sln /m /t:%target% /p:Configuration=%config% /p:Platform="%platform%" /clp:NoSummary;NoItemAndPropertyList;Verbosity=minimal /nologo
 if errorlevel 1 goto exit
 
 :run

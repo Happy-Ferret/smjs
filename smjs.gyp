@@ -6,6 +6,13 @@
   'target_defaults': {
     'default_configuration': 'Release',
 
+    # XXX this should probably be specified in common.gypi
+    'target_conditions': [
+      ['target_arch=="x64"', {
+        'msvs_configuration_platform': 'x64'
+      }]
+    ],
+
     'configurations': {
       'Debug': {
         'cflags': ['-g', '-O0'],
