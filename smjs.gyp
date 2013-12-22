@@ -15,6 +15,7 @@
 
     'configurations': {
       'Debug': {
+        'defines': ['DEBUG', 'JS_DEBUG', 'JS_GC_ZEAL'],
         'cflags': ['-g', '-O0'],
       },
       'Release': {
@@ -44,7 +45,10 @@
         'ENABLE_YARR_JIT=1',
         'JS_DEFAULT_JITREPORT_GRANULARITY=3',
         'JS_ION=1',
+        'JS_THREADSAFE=1',
+        'JSGC_GENERATIONAL=1',
         'JSGC_INCREMENTAL=1',
+        'JSGC_USE_EXACT_ROOTING=1',
 
         # Library output
         'STATIC_EXPORTABLE_JS_API=1',  # Re-exportable static library
@@ -126,6 +130,8 @@
                     # will be default initialized
             '4355', # warning C4355: 'this' : used in base member initializer
                     # list
+            '4624', # warning C4624: 'derived class' : destructor could not be
+                    # generated because a base class destructor is inaccessible
             '4661', # warning C4661: 'identifier' : no suitable definition
                     # provided for explicit template instantiation request
             '4804', # warning C4804: 'operation' : unsafe use of type 'bool'
@@ -297,6 +303,10 @@
           },
           'sources': [
             'src/js/assembler/jit/ExecutableAllocatorWin.cpp',
+            'src/js/threading/windows/ConditionVariable.cpp',
+            'src/js/threading/windows/Mutex.cpp',
+            'src/js/threading/windows/MutexPlatformData.h',
+            'src/js/threading/windows/Thread.cpp',
             'src/js/yarr/OSAllocatorWin.cpp',
           ],
         }, {
@@ -544,7 +554,7 @@
         # ENABLE_YARR_JIT
         'src/js/yarr/YarrJIT.cpp',
 
-        # msft
+        # mfbt
         'src/mozilla/Compression.cpp',
         'src/mozilla/FloatingPoint.cpp',
         'src/mozilla/HashFunctions.cpp',
@@ -559,6 +569,13 @@
         'src/mozilla/double-conversion/fast-dtoa.cc',
         'src/mozilla/double-conversion/fixed-dtoa.cc',
         'src/mozilla/double-conversion/strtod.cc',
+
+        'src/js/threading/AutoMutex.h',
+        'src/js/threading/ConditionVariable.h',
+        'src/js/threading/Mutex.h',
+        'src/js/threading/Once.cpp',
+        'src/js/threading/Once.h',
+        'src/js/threading/Thread.h',
       ],
     },
   ],
