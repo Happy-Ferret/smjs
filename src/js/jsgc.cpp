@@ -2411,14 +2411,11 @@ GCHelperThread::init()
     }
 
 #ifdef JS_THREADSAFE
-    if (!(wakeup = PR_NewCondVar(rt->gcLock)))
+    if (!wakeup.initialize())
         return false;
-    if (!(done = PR_NewCondVar(rt->gcLock)))
+    if (!done.initialize())
         return false;
-
-    thread = PR_CreateThread(PR_USER_THREAD, threadMain, this, PR_PRIORITY_NORMAL,
-                             PR_GLOBAL_THREAD, PR_JOINABLE_THREAD, 0);
-    if (!thread)
+    if (!thread.start(threadMain, this))
         return false;
 
     backgroundAllocation = (GetCPUCount() >= 2);
@@ -2436,29 +2433,23 @@ GCHelperThread::finish()
 
 
 #ifdef JS_THREADSAFE
-    PRThread *join = nullptr;
+    bool join = false;
     {
         AutoLockGC lock(rt);
-        if (thread && state != SHUTDOWN) {
+        if (thread.running() && state != SHUTDOWN) {
             /*
              * We cannot be in the ALLOCATING or CANCEL_ALLOCATION states as
              * the allocations should have been stopped during the last GC.
              */
             JS_ASSERT(state == IDLE || state == SWEEPING);
             if (state == IDLE)
-                PR_NotifyCondVar(wakeup);
+                wakeup.signal();
             state = SHUTDOWN;
-            join = thread;
+            join = true;
         }
     }
-    if (join) {
-        /* PR_DestroyThread is not necessary. */
-        PR_JoinThread(join);
-    }
-    if (wakeup)
-        PR_DestroyCondVar(wakeup);
-    if (done)
-        PR_DestroyCondVar(done);
+    if (join)
+      thread.join();
 #endif /* JS_THREADSAFE */
 }
 
@@ -2474,7 +2465,7 @@ MFBT_API void NuwaMarkCurrentThread(void (*recreate)(void *), void *arg);
 void
 GCHelperThread::threadMain(void *arg)
 {
-    PR_SetCurrentThreadName("JS GC Helper");
+    Thread::setName("JS GC Helper");
 
 #ifdef MOZ_NUWA_PROCESS
     if (IsNuwaProcess && IsNuwaProcess()) {
@@ -2487,12 +2478,12 @@ GCHelperThread::threadMain(void *arg)
 }
 
 void
-GCHelperThread::wait(PRCondVar *which)
+GCHelperThread::wait(ConditionVariable& which)
 {
-    rt->gcLockOwner = nullptr;
-    PR_WaitCondVar(which, PR_INTERVAL_NO_TIMEOUT);
+    rt->gcLockOwner = Thread::none();
+    which.wait(rt->gcLock);
 #ifdef DEBUG
-    rt->gcLockOwner = PR_GetCurrentThread();
+    rt->gcLockOwner = Thread::current();
 #endif
 }
 
@@ -2524,7 +2515,7 @@ GCHelperThread::threadLoop()
             doSweep();
             if (state == SWEEPING)
                 state = IDLE;
-            PR_NotifyAllCondVar(done);
+            done.broadcast();
 #if JS_TRACE_LOGGING
             logger->log(TraceLogging::GC_SWEEPING_STOP);
 #endif
@@ -2559,7 +2550,7 @@ GCHelperThread::threadLoop()
             break;
           case CANCEL_ALLOCATION:
             state = IDLE;
-            PR_NotifyAllCondVar(done);
+            done.broadcast();
             break;
         }
     }
@@ -2578,7 +2569,7 @@ GCHelperThread::startBackgroundSweep(bool shouldShrink)
     sweepFlag = true;
     shrinkFlag = shouldShrink;
     state = SWEEPING;
-    PR_NotifyCondVar(wakeup);
+    wakeup.signal();
 #endif /* JS_THREADSAFE */
 }
 
@@ -2594,7 +2585,7 @@ GCHelperThread::startBackgroundShrink()
         JS_ASSERT(!sweepFlag);
         shrinkFlag = true;
         state = SWEEPING;
-        PR_NotifyCondVar(wakeup);
+        wakeup.signal();
         break;
       case SWEEPING:
         shrinkFlag = true;
@@ -2657,7 +2648,7 @@ GCHelperThread::startBackgroundAllocationIfIdle()
 #ifdef JS_THREADSAFE
     if (state == IDLE) {
         state = ALLOCATING;
-        PR_NotifyCondVar(wakeup);
+        wakeup.signal();
     }
 #endif /* JS_THREADSAFE */
 }
@@ -2727,7 +2718,7 @@ bool
 GCHelperThread::onBackgroundThread()
 {
 #ifdef JS_THREADSAFE
-    return PR_GetCurrentThread() == getThread();
+    return Thread::current() == getThreadId();
 #else
     return false;
 #endif

@@ -13,14 +13,18 @@
 #ifndef jsworkers_h
 #define jsworkers_h
 
+#include "mozilla/DebugOnly.h"
 #include "mozilla/GuardObjects.h"
 #include "mozilla/PodOperations.h"
 
 #include "jscntxt.h"
-#include "jslock.h"
 
 #include "frontend/TokenStream.h"
 #include "jit/Ion.h"
+#include "threading/Mutex.h"
+
+using mozilla::DebugOnly;
+using js::threading::Mutex;
 
 namespace js {
 
@@ -77,7 +81,9 @@ class WorkerThreadState
     /* Worklist for source compression worker threads. */
     Vector<SourceCompressionTask *, 0, SystemAllocPolicy> compressionWorklist;
 
-    WorkerThreadState(JSRuntime *rt) {
+    WorkerThreadState(JSRuntime *rt)
+      : lockOwner(Thread::none())
+    {
         mozilla::PodZero(this);
         runtime = rt;
     }
@@ -138,15 +144,12 @@ class WorkerThreadState
      * Lock protecting all mutable shared state accessed by helper threads, and
      * used by all condition variables.
      */
-    PRLock *workerLock;
-
-# ifdef DEBUG
-    PRThread *lockOwner;
-# endif
+    Mutex workerLock;
+    DebugOnly<Thread::Id> lockOwner;
 
     /* Condvars for threads waiting/notifying each other. */
-    PRCondVar *consumerWakeup;
-    PRCondVar *producerWakeup;
+    ConditionVariable consumerWakeup;
+    ConditionVariable producerWakeup;
 
     /*
      * Number of AsmJS workers that encountered failure for the active module.
@@ -167,7 +170,7 @@ struct WorkerThread
     JSRuntime *runtime;
 
     mozilla::Maybe<PerThreadData> threadData;
-    PRThread *thread;
+    Thread thread;
 
     /* Indicate to an idle thread that it should finish executing. */
     bool terminate;

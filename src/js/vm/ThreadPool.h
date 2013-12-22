@@ -11,7 +11,6 @@
 #include <stdint.h>
 
 #include "jsalloc.h"
-#include "jslock.h"
 #include "jspubtd.h"
 
 #include "js/Vector.h"

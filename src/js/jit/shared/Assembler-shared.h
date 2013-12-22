@@ -114,10 +114,18 @@ IsCompilingAsmJS()
 }
 #endif
 
+struct DeadPtr { };
+static const DeadPtr DEAD_PTR;
+
 // Pointer to be embedded as an immediate in an instruction.
 struct ImmPtr
 {
     void *value;
+
+    explicit ImmPtr(const DeadPtr&)
+      : value(reinterpret_cast<void*>(0xdeadc0de))
+    {
+    }
 
     explicit ImmPtr(const void *value) : value(const_cast<void*>(value))
     {

@@ -124,15 +124,15 @@ JSRuntime::JSRuntime(JSUseHelperThreads useHelperThreads)
     handlingSignal(false),
     operationCallback(nullptr),
 #ifdef JS_THREADSAFE
-    operationCallbackLock(nullptr),
-    operationCallbackOwner(nullptr),
+    operationCallbackLock(),
+    operationCallbackOwner(Thread::none()),
 #else
     operationCallbackLockTaken(false),
 #endif
 #ifdef JS_WORKER_THREADS
     workerThreadState(nullptr),
-    exclusiveAccessLock(nullptr),
-    exclusiveAccessOwner(nullptr),
+    exclusiveAccessLock(),
+    exclusiveAccessOwner(Thread::none()),
     mainThreadHasExclusiveAccess(false),
     numExclusiveThreads(0),
 #endif
@@ -142,7 +142,7 @@ JSRuntime::JSRuntime(JSUseHelperThreads useHelperThreads)
     defaultLocale(nullptr),
     defaultVersion_(JSVERSION_DEFAULT),
 #ifdef JS_THREADSAFE
-    ownerThread_(nullptr),
+    ownerThread_(Thread::none()),
 #endif
     tempLifoAlloc(TEMP_LIFO_ALLOC_PRIMARY_CHUNK_SIZE),
     freeLifoAlloc(TEMP_LIFO_ALLOC_PRIMARY_CHUNK_SIZE),
@@ -254,8 +254,8 @@ JSRuntime::JSRuntime(JSUseHelperThreads useHelperThreads)
     hadOutOfMemory(false),
     haveCreatedContext(false),
     data(nullptr),
-    gcLock(nullptr),
-    gcLockOwner(nullptr),
+    gcLock(),
+    gcLockOwner(Thread::none()),
     gcHelperThread(thisFromCtor()),
     signalHandlersInstalled_(false),
     defaultFreeOp_(thisFromCtor(), false),
@@ -347,20 +347,17 @@ bool
 JSRuntime::init(uint32_t maxbytes)
 {
 #ifdef JS_THREADSAFE
-    ownerThread_ = PR_GetCurrentThread();
+    ownerThread_ = Thread::current();
 
-    operationCallbackLock = PR_NewLock();
-    if (!operationCallbackLock)
+    if (!operationCallbackLock.initialize())
         return false;
 
-    gcLock = PR_NewLock();
-    if (!gcLock)
+    if (!gcLock.initialize())
         return false;
 #endif
 
 #ifdef JS_WORKER_THREADS
-    exclusiveAccessLock = PR_NewLock();
-    if (!exclusiveAccessLock)
+    if (!exclusiveAccessLock.initialize())
         return false;
 #endif
 
@@ -476,9 +473,7 @@ JSRuntime::~JSRuntime()
 #ifdef JS_WORKER_THREADS
     js_delete(workerThreadState);
 
-    JS_ASSERT(!exclusiveAccessOwner);
-    if (exclusiveAccessLock)
-        PR_DestroyLock(exclusiveAccessLock);
+    JS_ASSERT(!static_cast<Thread::Id>(exclusiveAccessOwner));
 
     // Avoid bogus asserts during teardown.
     JS_ASSERT(!numExclusiveThreads);
@@ -487,8 +482,6 @@ JSRuntime::~JSRuntime()
 
 #ifdef JS_THREADSAFE
     JS_ASSERT(!operationCallbackOwner);
-    if (operationCallbackLock)
-        PR_DestroyLock(operationCallbackLock);
 #endif
 
     /*
@@ -520,11 +513,6 @@ JSRuntime::~JSRuntime()
 
     js_FinishGC(this);
     atomsCompartment_ = nullptr;
-
-#ifdef JS_THREADSAFE
-    if (gcLock)
-        PR_DestroyLock(gcLock);
-#endif
 
     js_free(defaultLocale);
     js_delete(bumpAlloc_);
@@ -911,7 +899,7 @@ js::CurrentThreadCanAccessRuntime(JSRuntime *rt)
 {
     DebugOnly<PerThreadData *> pt = js::TlsPerThreadData.get();
     JS_ASSERT(pt && pt->associatedWith(rt));
-    return rt->ownerThread_ == PR_GetCurrentThread() || InExclusiveParallelSection();
+    return rt->ownerThread_ == Thread::current() || InExclusiveParallelSection();
 }
 
 bool
@@ -949,13 +937,14 @@ JSRuntime::assertCanLock(RuntimeLock which)
     // it must be done in the order below.
     switch (which) {
       case ExclusiveAccessLock:
-        JS_ASSERT(exclusiveAccessOwner != PR_GetCurrentThread());
+        JS_ASSERT(static_cast<Thread::Id>(exclusiveAccessOwner) !=
+                  Thread::current());
       case WorkerThreadStateLock:
         JS_ASSERT_IF(workerThreadState, !workerThreadState->isLocked());
       case OperationCallbackLock:
         JS_ASSERT(!currentThreadOwnsOperationCallbackLock());
       case GCLock:
-        JS_ASSERT(gcLockOwner != PR_GetCurrentThread());
+        JS_ASSERT(static_cast<Thread::Id>(gcLockOwner) != Thread::current());
         break;
       default:
         MOZ_CRASH();

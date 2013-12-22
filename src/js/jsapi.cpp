@@ -27,7 +27,6 @@
 #include "jsfun.h"
 #include "jsgc.h"
 #include "jsiter.h"
-#include "jslock.h"
 #include "jsmath.h"
 #include "jsnum.h"
 #include "jsobj.h"
@@ -5931,7 +5930,10 @@ JS_PUBLIC_API(intptr_t)
 JS_GetCurrentThread()
 {
 #ifdef JS_THREADSAFE
-    return reinterpret_cast<intptr_t>(PR_GetCurrentThread());
+    // This is not great - Thread::Id encapsulates a pthread_t. In theory
+    // pthread_t's shouldn't be compared with the equality (==) operator; the
+    // user is supposed to use pthread_equal to compare them.
+    return Thread::current();
 #else
     return 0;
 #endif
@@ -6117,20 +6119,11 @@ UnhideScriptedCaller(JSContext *cx)
 
 } /* namespace JS */
 
-#ifdef JS_THREADSAFE
-static PRStatus
-CallOnce(void *func)
-{
-    JSInitCallback init = JS_DATA_TO_FUNC_PTR(JSInitCallback, func);
-    return init() ? PR_SUCCESS : PR_FAILURE;
-}
-#endif
-
 JS_PUBLIC_API(bool)
 JS_CallOnce(JSCallOnceType *once, JSInitCallback func)
 {
 #ifdef JS_THREADSAFE
-    return PR_CallOnceWithArg(once, CallOnce, JS_FUNC_TO_DATA_PTR(void *, func)) == PR_SUCCESS;
+    return once->call(func);
 #else
     if (!*once) {
         *once = true;

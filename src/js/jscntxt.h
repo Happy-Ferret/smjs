@@ -1037,8 +1037,8 @@ class AutoLockForExclusiveAccess
         runtime = rt;
         if (runtime->numExclusiveThreads) {
             runtime->assertCanLock(JSRuntime::ExclusiveAccessLock);
-            PR_Lock(runtime->exclusiveAccessLock);
-            runtime->exclusiveAccessOwner = PR_GetCurrentThread();
+            runtime->exclusiveAccessLock.lock();
+            runtime->exclusiveAccessOwner = Thread::current();
         } else {
             JS_ASSERT(!runtime->mainThreadHasExclusiveAccess);
             runtime->mainThreadHasExclusiveAccess = true;
@@ -1054,13 +1054,15 @@ class AutoLockForExclusiveAccess
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
         init(rt);
     }
+
     ~AutoLockForExclusiveAccess() {
         if (runtime->numExclusiveThreads) {
-            JS_ASSERT(runtime->exclusiveAccessOwner == PR_GetCurrentThread());
+            JS_ASSERT(static_cast<Thread::Id>(runtime->exclusiveAccessOwner) ==
+                      Thread::current());
 #ifdef DEBUG
-            runtime->exclusiveAccessOwner = nullptr;
+            runtime->exclusiveAccessOwner = Thread::none();
 #endif
-            PR_Unlock(runtime->exclusiveAccessLock);
+            runtime->exclusiveAccessLock.unlock();
         } else {
             JS_ASSERT(runtime->mainThreadHasExclusiveAccess);
             runtime->mainThreadHasExclusiveAccess = false;

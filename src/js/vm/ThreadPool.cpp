@@ -6,12 +6,12 @@
 
 #include "vm/ThreadPool.h"
 
-#include "jslock.h"
-
+#include "threading/Thread.h"
 #include "vm/Monitor.h"
 #include "vm/Runtime.h"
 
 using namespace js;
+using js::threading::Thread;
 
 /////////////////////////////////////////////////////////////////////////////
 // ThreadPoolWorker
@@ -88,16 +88,13 @@ ThreadPoolWorker::start()
     // Set state to active now, *before* the thread starts:
     state_ = ACTIVE;
 
-    if (!PR_CreateThread(PR_USER_THREAD,
-                         ThreadMain, this,
-                         PR_PRIORITY_NORMAL, PR_LOCAL_THREAD,
-                         PR_UNJOINABLE_THREAD,
-                         WORKER_THREAD_STACK_SIZE))
-    {
+    Thread thread;
+    if (!thread.start(ThreadMain, this)) {
         // If the thread failed to start, call it TERMINATED.
         state_ = TERMINATED;
         return false;
     }
+    thread.detach();
 
     return true;
 #endif

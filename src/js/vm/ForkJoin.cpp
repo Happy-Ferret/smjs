@@ -7,7 +7,6 @@
 #include "vm/ForkJoin.h"
 
 #include "jscntxt.h"
-#include "jslock.h"
 #include "jsprf.h"
 
 #ifdef JS_THREADSAFE
@@ -220,7 +219,7 @@ enum ForkJoinMode {
     NumForkJoinModes
 };
 
-unsigned ForkJoinSlice::ThreadPrivateIndex;
+ThreadLocal<ForkJoinSlice*> ForkJoinSlice::TLSForkJoinSlice;
 bool ForkJoinSlice::TLSInitialized;
 
 class ParallelDo
@@ -304,13 +303,15 @@ class ForkJoinShared : public TaskExecutor, public Monitor
     /////////////////////////////////////////////////////////////////////////
     // Constant fields
 
-    JSContext *const cx_;          // Current context
-    ThreadPool *const threadPool_; // The thread pool.
-    HandleObject fun_;             // The JavaScript function to execute.
-    const uint32_t numSlices_;     // Total number of threads.
-    PRCondVar *rendezvousEnd_;     // Cond. var used to signal end of rendezvous.
-    PRLock *cxLock_;               // Locks cx_ for parallel VM calls.
-    ParallelBailoutRecord *const records_; // Bailout records for each slice
+    JSContext *const cx_;                   // Current context
+    ThreadPool *const threadPool_;          // The thread pool.
+    HandleObject fun_;                      // The JavaScript function to
+                                            // execute.
+    const uint32_t numSlices_;              // Total number of threads.
+    ConditionVariable rendezvousEnd_;       // Cond. var used to signal end of
+                                            // rendezvous.
+    Mutex cxLock_;                          // Locks cx_ for parallel VM calls.
+    ParallelBailoutRecord *const records_;  // Bailout records for each slice
 
     /////////////////////////////////////////////////////////////////////////
     // Per-thread arenas
@@ -411,8 +412,8 @@ class ForkJoinShared : public TaskExecutor, public Monitor
     JS::Zone *zone() { return cx_->zone(); }
     JSCompartment *compartment() { return cx_->compartment(); }
 
-    JSContext *acquireContext() { PR_Lock(cxLock_); return cx_; }
-    void releaseContext() { PR_Unlock(cxLock_); }
+    JSContext *acquireContext() { cxLock_.lock(); return cx_; }
+    void releaseContext() { cxLock_.unlock(); }
 };
 
 class AutoEnterWarmup
@@ -445,11 +446,11 @@ class AutoSetForkJoinSlice
 {
   public:
     AutoSetForkJoinSlice(ForkJoinSlice *threadCx) {
-        PR_SetThreadPrivate(ForkJoinSlice::ThreadPrivateIndex, threadCx);
+        ForkJoinSlice::TLSForkJoinSlice.set(threadCx);
     }
 
     ~AutoSetForkJoinSlice() {
-        PR_SetThreadPrivate(ForkJoinSlice::ThreadPrivateIndex, nullptr);
+        ForkJoinSlice::TLSForkJoinSlice.set(nullptr);
     }
 };
 
@@ -1313,8 +1314,8 @@ ForkJoinShared::ForkJoinShared(JSContext *cx,
     threadPool_(threadPool),
     fun_(fun),
     numSlices_(numSlices),
-    rendezvousEnd_(nullptr),
-    cxLock_(nullptr),
+    rendezvousEnd_(),
+    cxLock_(),
     records_(records),
     allocators_(cx),
     uncompleted_(uncompleted),
@@ -1345,12 +1346,10 @@ ForkJoinShared::init()
     if (!Monitor::init())
         return false;
 
-    rendezvousEnd_ = PR_NewCondVar(lock_);
-    if (!rendezvousEnd_)
+    if (!rendezvousEnd_.initialize())
         return false;
 
-    cxLock_ = PR_NewLock();
-    if (!cxLock_)
+    if (!cxLock_.initialize())
         return false;
 
     for (unsigned i = 0; i < numSlices_; i++) {
@@ -1369,11 +1368,6 @@ ForkJoinShared::init()
 
 ForkJoinShared::~ForkJoinShared()
 {
-    if (rendezvousEnd_)
-        PR_DestroyCondVar(rendezvousEnd_);
-
-    PR_DestroyLock(cxLock_);
-
     while (allocators_.length() > 0)
         js_delete(allocators_.popCopy());
 }
@@ -1618,7 +1612,7 @@ ForkJoinShared::joinRendezvous(ForkJoinSlice &slice)
     // notifying the main thread that they have completed and the main
     // thread notifying the workers to resume.
     while (rendezvousIndex_ == index)
-        PR_WaitCondVar(rendezvousEnd_, PR_INTERVAL_NO_TIMEOUT);
+        rendezvousEnd_.wait(lock_);
 }
 
 void
@@ -1632,7 +1626,7 @@ ForkJoinShared::endRendezvous(ForkJoinSlice &slice)
     rendezvousIndex_++;
 
     // Signal other threads that rendezvous is over.
-    PR_NotifyAllCondVar(rendezvousEnd_);
+    rendezvousEnd_.broadcast();
 }
 
 void
@@ -1756,7 +1750,7 @@ bool
 ForkJoinSlice::InitializeTLS()
 {
     if (!TLSInitialized) {
-        if (PR_NewThreadPrivateIndex(&ThreadPrivateIndex, nullptr) != PR_SUCCESS)
+        if (!TLSForkJoinSlice.init())
             return false;
         TLSInitialized = true;
     }
