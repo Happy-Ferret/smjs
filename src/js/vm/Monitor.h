@@ -13,9 +13,15 @@
 
 #include <stddef.h>
 
-#include "jslock.h"
-
 #include "js/Utility.h"
+#include "threading/AutoMutex.h"
+#include "threading/ConditionVariable.h"
+#include "threading/Mutex.h"
+
+using js::threading::AutoMutexLock;
+using js::threading::AutoMutexUnlock;
+using js::threading::ConditionVariable;
+using js::threading::Mutex;
 
 namespace js {
 
@@ -30,28 +36,19 @@ class Monitor
     friend class AutoLockMonitor;
     friend class AutoUnlockMonitor;
 
-    PRLock *lock_;
-    PRCondVar *condVar_;
+    Mutex lock_;
+    ConditionVariable condVar_;
 
   public:
     Monitor()
-      : lock_(nullptr),
-        condVar_(nullptr)
+      : lock_(),
+        condVar_()
     { }
-
-    ~Monitor() {
-#ifdef JS_THREADSAFE
-        if (lock_)
-            PR_DestroyLock(lock_);
-        if (condVar_)
-            PR_DestroyCondVar(condVar_);
-#endif
-    }
 
     bool init();
 };
 
-class AutoLockMonitor
+class AutoLockMonitor: private AutoMutexLock
 {
   private:
 #ifdef JS_THREADSAFE
@@ -61,42 +58,31 @@ class AutoLockMonitor
   public:
     AutoLockMonitor(Monitor &monitor)
 #ifdef JS_THREADSAFE
-      : monitor(monitor)
-    {
-        PR_Lock(monitor.lock_);
-    }
-#else
-    {}
+      : AutoMutexLock(monitor.lock_),
+        monitor(monitor)
 #endif
-
-    ~AutoLockMonitor() {
-#ifdef JS_THREADSAFE
-        PR_Unlock(monitor.lock_);
-#endif
-    }
+    { }
 
     void wait() {
 #ifdef JS_THREADSAFE
-        mozilla::DebugOnly<PRStatus> status =
-          PR_WaitCondVar(monitor.condVar_, PR_INTERVAL_NO_TIMEOUT);
-        JS_ASSERT(status == PR_SUCCESS);
+        monitor.condVar_.wait(monitor.lock_);
 #endif
     }
 
     void notify() {
 #ifdef JS_THREADSAFE
-        PR_NotifyCondVar(monitor.condVar_);
+        monitor.condVar_.signal();
 #endif
     }
 
     void notifyAll() {
 #ifdef JS_THREADSAFE
-        PR_NotifyAllCondVar(monitor.condVar_);
+      monitor.condVar_.broadcast();
 #endif
     }
 };
 
-class AutoUnlockMonitor
+class AutoUnlockMonitor: private AutoMutexUnlock
 {
   private:
 #ifdef JS_THREADSAFE
@@ -106,19 +92,10 @@ class AutoUnlockMonitor
   public:
     AutoUnlockMonitor(Monitor &monitor)
 #ifdef JS_THREADSAFE
-      : monitor(monitor)
-    {
-        PR_Unlock(monitor.lock_);
-    }
-#else
-    {}
+      : AutoMutexUnlock(monitor.lock_),
+        monitor(monitor)
 #endif
-
-    ~AutoUnlockMonitor() {
-#ifdef JS_THREADSAFE
-        PR_Lock(monitor.lock_);
-#endif
-    }
+    { }
 };
 
 } // namespace js

@@ -38,6 +38,8 @@
 #endif
 #include "js/HashTable.h"
 #include "js/Vector.h"
+#include "threading/Mutex.h"
+#include "threading/Thread.h"
 #include "vm/CommonPropertyNames.h"
 #include "vm/DateTime.h"
 #include "vm/SPSProfiler.h"
@@ -48,6 +50,9 @@
 #pragma warning(push)
 #pragma warning(disable:4100) /* Silence unreferenced formal parameter warnings */
 #endif
+
+using js::threading::Mutex;
+using js::threading::Thread;
 
 namespace js {
 
@@ -741,8 +746,8 @@ struct JSRuntime : public JS::shadow::Runtime,
      * Protects all data that is touched in this process.
      */
 #ifdef JS_THREADSAFE
-    PRLock *operationCallbackLock;
-    PRThread *operationCallbackOwner;
+    Mutex operationCallbackLock;
+    Thread::Id operationCallbackOwner;
 #else
     bool operationCallbackLockTaken;
 #endif // JS_THREADSAFE
@@ -755,8 +760,8 @@ struct JSRuntime : public JS::shadow::Runtime,
             MOZ_GUARD_OBJECT_NOTIFIER_INIT;
             rt->assertCanLock(JSRuntime::OperationCallbackLock);
 #ifdef JS_THREADSAFE
-            PR_Lock(rt->operationCallbackLock);
-            rt->operationCallbackOwner = PR_GetCurrentThread();
+            rt->operationCallbackLock.lock();
+            rt->operationCallbackOwner = Thread::current();
 #else
             rt->operationCallbackLockTaken = true;
 #endif // JS_THREADSAFE
@@ -764,8 +769,8 @@ struct JSRuntime : public JS::shadow::Runtime,
         ~AutoLockForOperationCallback() {
             JS_ASSERT(rt->currentThreadOwnsOperationCallbackLock());
 #ifdef JS_THREADSAFE
-            rt->operationCallbackOwner = nullptr;
-            PR_Unlock(rt->operationCallbackLock);
+            rt->operationCallbackOwner = Thread::none();
+            rt->operationCallbackLock.unlock();
 #else
             rt->operationCallbackLockTaken = false;
 #endif // JS_THREADSAFE
@@ -776,7 +781,7 @@ struct JSRuntime : public JS::shadow::Runtime,
 
     bool currentThreadOwnsOperationCallbackLock() {
 #if defined(JS_THREADSAFE)
-        return operationCallbackOwner == PR_GetCurrentThread();
+        return operationCallbackOwner == Thread::current();
 #else
         return operationCallbackLockTaken;
 #endif
@@ -796,8 +801,8 @@ struct JSRuntime : public JS::shadow::Runtime,
      * Locking this only occurs if there is actually a thread other than the
      * main thread with an ExclusiveContext which could access such data.
      */
-    PRLock *exclusiveAccessLock;
-    mozilla::DebugOnly<PRThread *> exclusiveAccessOwner;
+    Mutex exclusiveAccessLock;
+    mozilla::DebugOnly<Thread::Id> exclusiveAccessOwner;
     mozilla::DebugOnly<bool> mainThreadHasExclusiveAccess;
 
     /* Number of non-main threads with an ExclusiveContext. */
@@ -814,7 +819,7 @@ struct JSRuntime : public JS::shadow::Runtime,
     bool currentThreadHasExclusiveAccess() {
 #if defined(JS_WORKER_THREADS) && defined(DEBUG)
         return (!numExclusiveThreads && mainThreadHasExclusiveAccess) ||
-            exclusiveAccessOwner == PR_GetCurrentThread();
+            static_cast<Thread::Id>(exclusiveAccessOwner) == Thread::current();
 #else
         return true;
 #endif
@@ -849,7 +854,7 @@ struct JSRuntime : public JS::shadow::Runtime,
 #ifdef JS_THREADSAFE
   private:
     /* See comment for JS_AbortIfWrongThread in jsapi.h. */
-    void *ownerThread_;
+    Thread::Id ownerThread_;
     friend bool js::CurrentThreadCanAccessRuntime(JSRuntime *rt);
   public:
 #endif
@@ -1354,8 +1359,8 @@ struct JSRuntime : public JS::shadow::Runtime,
 
   private:
     /* Synchronize GC heap access between main thread and GCHelperThread. */
-    PRLock *gcLock;
-    mozilla::DebugOnly<PRThread *> gcLockOwner;
+    Mutex gcLock;
+    mozilla::DebugOnly<Thread::Id> gcLockOwner;
 
     friend class js::GCHelperThread;
   public:
@@ -1363,19 +1368,19 @@ struct JSRuntime : public JS::shadow::Runtime,
     void lockGC() {
 #ifdef JS_THREADSAFE
         assertCanLock(GCLock);
-        PR_Lock(gcLock);
-        JS_ASSERT(!gcLockOwner);
+        gcLock.lock();
+        JS_ASSERT(!static_cast<Thread::Id>(gcLockOwner));
 #ifdef DEBUG
-        gcLockOwner = PR_GetCurrentThread();
+        gcLockOwner = Thread::current();
 #endif
 #endif
     }
 
     void unlockGC() {
 #ifdef JS_THREADSAFE
-        JS_ASSERT(gcLockOwner == PR_GetCurrentThread());
-        gcLockOwner = nullptr;
-        PR_Unlock(gcLock);
+        JS_ASSERT(static_cast<Thread::Id>(gcLockOwner) == Thread::current());
+        gcLockOwner = Thread::none();
+        gcLock.unlock();
 #endif
     }
 

@@ -9,6 +9,7 @@
 #include "prmjtime.h"
 
 #include "mozilla/MathAlgorithms.h"
+#include "threading/Once.h"
 
 #ifdef SOLARIS
 #define _REENTRANT 1
@@ -35,10 +36,6 @@
 #ifdef NS_HAVE_INVALID_PARAMETER_HANDLER
 #include <crtdbg.h>   /* for _CrtSetReportMode */
 #include <stdlib.h>   /* for _set_invalid_parameter_handler */
-#endif
-
-#ifdef JS_THREADSAFE
-#include "prinit.h"
 #endif
 
 #endif
@@ -68,6 +65,8 @@ extern int gettimeofday(struct timeval *tv);
 
 #define G2037GMTMICROHI        0x00e45fab /* micro secs to 2037 high */
 #define G2037GMTMICROLOW       0x7a238000 /* micro secs to 2037 low */
+
+using js::threading::Once;
 
 #if defined(XP_WIN)
 
@@ -145,14 +144,14 @@ NowCalibrate()
 #define LASTLOCK_SPINCOUNT 4096
 
 #ifdef JS_THREADSAFE
-static PRStatus
+static bool
 NowInit(void)
 {
     memset(&calibration, 0, sizeof(calibration));
     NowCalibrate();
     InitializeCriticalSectionAndSpinCount(&calibration.calibration_lock, CALIBRATIONLOCK_SPINCOUNT);
     InitializeCriticalSectionAndSpinCount(&calibration.data_lock, DATALOCK_SPINCOUNT);
-    return PR_SUCCESS;
+    return true;
 }
 
 void
@@ -167,7 +166,7 @@ PRMJ_NowShutdown()
 #define MUTEX_UNLOCK(m) LeaveCriticalSection(m)
 #define MUTEX_SETSPINCOUNT(m, c) SetCriticalSectionSpinCount((m),(c))
 
-static PRCallOnceType calibrationOnce = { 0 };
+static Once calibrationOnce;
 
 #else
 
@@ -283,7 +282,7 @@ PRMJ_Now(void)
 
     /* For non threadsafe platforms, NowInit is not necessary */
 #ifdef JS_THREADSAFE
-    PR_CallOnce(&calibrationOnce, NowInit);
+    calibrationOnce.call(NowInit);
 #endif
     do {
         if (!calibration.calibrated || needsCalibration) {

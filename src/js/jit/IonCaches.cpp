@@ -253,7 +253,7 @@ class IonCache::StubAttacher
     virtual void patchNextStubJump(MacroAssembler &masm, IonCode *code) = 0;
 };
 
-const ImmPtr IonCache::StubAttacher::STUB_ADDR = ImmPtr((void*)0xdeadc0de);
+const ImmPtr IonCache::StubAttacher::STUB_ADDR = ImmPtr(DEAD_PTR);
 
 class RepatchIonCache::RepatchStubAppender : public IonCache::StubAttacher
 {

@@ -10,8 +10,9 @@
 #include "jscntxt.h"
 
 #include "gc/GCInternals.h"
-
 #include "jit/Ion.h"
+
+#include "mozilla/ThreadLocal.h"
 
 ///////////////////////////////////////////////////////////////////////////
 // Read Me First
@@ -199,6 +200,8 @@
 //
 ///////////////////////////////////////////////////////////////////////////
 
+using mozilla::ThreadLocal;
+
 namespace js {
 
 class ForkJoinActivation : public Activation
@@ -382,8 +385,7 @@ class ForkJoinSlice : public ThreadSafeContext
     friend class AutoSetForkJoinSlice;
 
 #if defined(JS_THREADSAFE) && defined(JS_ION)
-    // Initialized by InitializeTLS()
-    static unsigned ThreadPrivateIndex;
+    static ThreadLocal<ForkJoinSlice*> TLSForkJoinSlice;
     static bool TLSInitialized;
 #endif
 
@@ -514,7 +516,7 @@ static inline void SpewBailoutIR(IonLIRTraceData *data) { }
 js::ForkJoinSlice::Current()
 {
 #if defined(JS_THREADSAFE) && defined(JS_ION)
-    return (ForkJoinSlice*) PR_GetThreadPrivate(ThreadPrivateIndex);
+    return TLSForkJoinSlice.get();
 #else
     return nullptr;
 #endif

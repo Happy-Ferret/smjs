@@ -40,9 +40,6 @@
 #include "jsatom.h"
 #include "jscntxt.h"
 #include "jsfun.h"
-#ifdef JS_THREADSAFE
-#include "jslock.h"
-#endif
 #include "jsobj.h"
 #include "jsprf.h"
 #include "jsscript.h"
@@ -66,6 +63,10 @@
 #include "perf/jsperf.h"
 #include "shell/jsheaptools.h"
 #include "shell/jsoptparse.h"
+#include "threading/AutoMutex.h"
+#include "threading/ConditionVariable.h"
+#include "threading/Mutex.h"
+#include "threading/Thread.h"
 #include "vm/ArgumentsObject.h"
 #include "vm/Monitor.h"
 #include "vm/Shape.h"
@@ -83,6 +84,11 @@
 
 using namespace js;
 using namespace js::cli;
+
+using js::threading::AutoMutexLock;
+using js::threading::ConditionVariable;
+using js::threading::Mutex;
+using js::threading::Thread;
 
 using mozilla::ArrayLength;
 using mozilla::DoubleEqualsInt32;
@@ -106,12 +112,6 @@ static size_t gStackChunkSize = 8192;
 static size_t gMaxStackSize = 2 * 128 * sizeof(size_t) * 1024;
 #else
 static size_t gMaxStackSize = 128 * sizeof(size_t) * 1024;
-#endif
-
-#ifdef JS_THREADSAFE
-static unsigned gStackBaseThreadIndex;
-#else
-static uintptr_t gStackBase;
 #endif
 
 /*
@@ -154,13 +154,14 @@ CancelExecution(JSRuntime *rt);
  */
 #ifdef JS_THREADSAFE
 
-static PRLock *gWatchdogLock = nullptr;
-static PRCondVar *gWatchdogWakeup = nullptr;
-static PRThread *gWatchdogThread = nullptr;
+static Mutex gWatchdogLock;
+static ConditionVariable gWatchdogWakeup;
+static Thread gWatchdogThread;
+static bool gWatchdogAlive = false;
 static bool gWatchdogHasTimeout = false;
 static int64_t gWatchdogTimeout = 0;
 
-static PRCondVar *gSleepWakeup = nullptr;
+static ConditionVariable gSleepWakeup;
 
 #else
 
@@ -2780,10 +2781,10 @@ Sleep_fn(JSContext *cx, unsigned argc, Value *vp)
                   ? 0
                   : int64_t(PRMJ_USEC_PER_SEC * t_secs);
     }
-    PR_Lock(gWatchdogLock);
+    AutoMutexLock lock(gWatchdogLock);
     int64_t to_wakeup = PRMJ_Now() + t_ticks;
     for (;;) {
-        PR_WaitCondVar(gSleepWakeup, t_ticks);
+        gSleepWakeup.wait(gWatchdogLock, t_ticks);
         if (gTimedOut)
             break;
         int64_t now = PRMJ_Now();
@@ -2791,60 +2792,44 @@ Sleep_fn(JSContext *cx, unsigned argc, Value *vp)
             break;
         t_ticks = to_wakeup - now;
     }
-    PR_Unlock(gWatchdogLock);
     return !gTimedOut;
 }
 
 static bool
 InitWatchdog(JSRuntime *rt)
 {
-    JS_ASSERT(!gWatchdogThread);
-    gWatchdogLock = PR_NewLock();
-    if (gWatchdogLock) {
-        gWatchdogWakeup = PR_NewCondVar(gWatchdogLock);
-        if (gWatchdogWakeup) {
-            gSleepWakeup = PR_NewCondVar(gWatchdogLock);
-            if (gSleepWakeup)
-                return true;
-            PR_DestroyCondVar(gWatchdogWakeup);
-        }
-        PR_DestroyLock(gWatchdogLock);
-    }
-    return false;
+    return gWatchdogLock.initialize() &&
+           gWatchdogWakeup.initialize() &&
+           gSleepWakeup.initialize();
 }
 
 static void
 KillWatchdog()
 {
-    PRThread *thread;
+    if (!gWatchdogThread.running())
+        return;
 
-    PR_Lock(gWatchdogLock);
-    thread = gWatchdogThread;
-    if (thread) {
-        /*
-         * The watchdog thread is running, tell it to terminate waking it up
-         * if necessary.
-         */
-        gWatchdogThread = nullptr;
-        PR_NotifyCondVar(gWatchdogWakeup);
+    /*
+     * The watchdog thread is running, tell it to terminate waking it up
+     * if necessary.
+     */
+    {
+        AutoMutexLock lock(gWatchdogLock);
+        gWatchdogAlive = false;
+        gWatchdogWakeup.signal();
     }
-    PR_Unlock(gWatchdogLock);
-    if (thread)
-        PR_JoinThread(thread);
-    PR_DestroyCondVar(gSleepWakeup);
-    PR_DestroyCondVar(gWatchdogWakeup);
-    PR_DestroyLock(gWatchdogLock);
+    gWatchdogThread.join();
 }
 
 static void
 WatchdogMain(void *arg)
 {
-    PR_SetCurrentThreadName("JS Watchdog");
+    Thread::setName("JS Watchdog");
 
     JSRuntime *rt = (JSRuntime *) arg;
 
-    PR_Lock(gWatchdogLock);
-    while (gWatchdogThread) {
+    gWatchdogLock.lock();
+    while (gWatchdogAlive) {
         int64_t now = PRMJ_Now();
         if (gWatchdogHasTimeout && !IsBefore(now, gWatchdogTimeout)) {
             /*
@@ -2852,12 +2837,12 @@ WatchdogMain(void *arg)
              * outside the lock.
              */
             gWatchdogHasTimeout = false;
-            PR_Unlock(gWatchdogLock);
+            gWatchdogLock.unlock();
             CancelExecution(rt);
-            PR_Lock(gWatchdogLock);
+            gWatchdogLock.lock();
 
             /* Wake up any threads doing sleep. */
-            PR_NotifyAllCondVar(gSleepWakeup);
+            gSleepWakeup.broadcast();
         } else {
             if (gWatchdogHasTimeout) {
                 /*
@@ -2867,49 +2852,37 @@ WatchdogMain(void *arg)
                 JS_TriggerOperationCallback(rt);
             }
 
-            uint64_t sleepDuration = PR_INTERVAL_NO_TIMEOUT;
             if (gWatchdogHasTimeout)
-                sleepDuration = PR_TicksPerSecond() / 10;
-            mozilla::DebugOnly<PRStatus> status =
-              PR_WaitCondVar(gWatchdogWakeup, sleepDuration);
-            JS_ASSERT(status == PR_SUCCESS);
+              gWatchdogWakeup.wait(gWatchdogLock);
+            else
+              gWatchdogWakeup.wait(gWatchdogLock, 100000 /* usec */);
         }
     }
-    PR_Unlock(gWatchdogLock);
+    gWatchdogLock.unlock();
 }
 
 static bool
 ScheduleWatchdog(JSRuntime *rt, double t)
 {
+    AutoMutexLock lock(gWatchdogLock);
+
     if (t <= 0) {
-        PR_Lock(gWatchdogLock);
         gWatchdogHasTimeout = false;
-        PR_Unlock(gWatchdogLock);
         return true;
     }
 
     int64_t interval = int64_t(ceil(t * PRMJ_USEC_PER_SEC));
     int64_t timeout = PRMJ_Now() + interval;
-    PR_Lock(gWatchdogLock);
-    if (!gWatchdogThread) {
+    if (!gWatchdogThread.running()) {
         JS_ASSERT(!gWatchdogHasTimeout);
-        gWatchdogThread = PR_CreateThread(PR_USER_THREAD,
-                                          WatchdogMain,
-                                          rt,
-                                          PR_PRIORITY_NORMAL,
-                                          PR_LOCAL_THREAD,
-                                          PR_JOINABLE_THREAD,
-                                          0);
-        if (!gWatchdogThread) {
-            PR_Unlock(gWatchdogLock);
+        gWatchdogAlive = true;
+        if (!gWatchdogThread.start(WatchdogMain, rt))
             return false;
-        }
     } else if (!gWatchdogHasTimeout || IsBefore(timeout, gWatchdogTimeout)) {
-         PR_NotifyCondVar(gWatchdogWakeup);
+        gWatchdogWakeup.signal();
     }
     gWatchdogHasTimeout = true;
     gWatchdogTimeout = timeout;
-    PR_Unlock(gWatchdogLock);
     return true;
 }
 
@@ -5709,15 +5682,6 @@ main(int argc, char **argv, char **envp)
 
 #ifdef HAVE_SETLOCALE
     setlocale(LC_ALL, "");
-#endif
-
-#ifdef JS_THREADSAFE
-    if (PR_FAILURE == PR_NewThreadPrivateIndex(&gStackBaseThreadIndex, nullptr) ||
-        PR_FAILURE == PR_SetThreadPrivate(gStackBaseThreadIndex, &stackDummy)) {
-        return 1;
-    }
-#else
-    gStackBase = (uintptr_t) &stackDummy;
 #endif
 
 #ifdef XP_OS2

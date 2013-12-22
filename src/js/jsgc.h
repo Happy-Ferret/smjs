@@ -12,13 +12,19 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/MemoryReporting.h"
 
-#include "jslock.h"
 #include "jsobj.h"
 
 #include "js/GCAPI.h"
 #include "js/SliceBudget.h"
 #include "js/Tracer.h"
 #include "js/Vector.h"
+
+#include "threading/ConditionVariable.h"
+#include "threading/Mutex.h"
+#include "threading/Thread.h"
+
+using js::threading::ConditionVariable;
+using js::threading::Thread;
 
 class JSAtom;
 struct JSCompartment;
@@ -790,12 +796,12 @@ class GCHelperThread {
     static const size_t FREE_ARRAY_LENGTH = FREE_ARRAY_SIZE / sizeof(void *);
 
     JSRuntime         *const rt;
-    PRThread          *thread;
-    PRCondVar         *wakeup;
-    PRCondVar         *done;
+    Thread            thread;
+    ConditionVariable wakeup;
+    ConditionVariable done;
     volatile State    state;
 
-    void wait(PRCondVar *which);
+    void wait(ConditionVariable& which);
 
     bool              sweepFlag;
     bool              shrinkFlag;
@@ -827,9 +833,9 @@ class GCHelperThread {
   public:
     GCHelperThread(JSRuntime *rt)
       : rt(rt),
-        thread(nullptr),
-        wakeup(nullptr),
-        done(nullptr),
+        thread(),
+        wakeup(),
+        done(),
         state(IDLE),
         sweepFlag(false),
         shrinkFlag(false),
@@ -864,8 +870,8 @@ class GCHelperThread {
         backgroundAllocation = false;
     }
 
-    PRThread *getThread() const {
-        return thread;
+    Thread::Id getThreadId() const {
+        return thread.id();
     }
 
     bool onBackgroundThread();

@@ -4,20 +4,22 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "vm/Monitor.h"
+#ifndef platform_win_MutexPlatformData_h
+#define platform_win_MutexPlatformData_h
 
-using namespace js;
+#include <Windows.h>
 
-bool
-Monitor::init()
-{
-#ifdef JS_THREADSAFE
-    if (!lock_.initialize())
-        return false;
+#include "threading/Mutex.h"
 
-    if (!condVar_.initialize())
-        return false;
-#endif
 
-    return true;
-}
+namespace js {
+namespace threading {
+
+struct Mutex::PlatformData {
+    CRITICAL_SECTION cs;
+};
+
+} // namespace threading
+} // namespace js
+
+#endif // platform_win_MutexPlatformData_h
