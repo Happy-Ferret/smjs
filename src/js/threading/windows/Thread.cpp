@@ -19,7 +19,6 @@ namespace threading {
 
 struct Thread::PlatformData {
     HANDLE handle;
-    unsigned int id;
 };
 
 
@@ -39,68 +38,57 @@ class ThreadTrampoline {
 
         // Copy information out of the trampoline object onto the stack, and
         // free the trampoline object.
-        void* arg = trampoline->arg();
-        Thread::Entry entry = trampoline->entry();
+        void* arg = trampoline->arg_;
+        Thread::Entry entry = trampoline->entry_;
         delete trampoline;
 
         entry(arg);
-
         return 0;
     }
 
   private:
-    inline Thread::Entry entry() const {
-        return entry_;
-    }
-
-    inline void* arg() const {
-        return arg_;
-    }
-
     Thread::Entry entry_;
     void* arg_;
 };
 
 
 bool Thread::start(Thread::Entry entry, void* arg) {
-    PlatformData* data;
-    ThreadTrampoline* trampoline;
-    uintptr_t handle;
-    unsigned int id;
+    assert(!running());
 
-    assert(!running_);
+    PlatformData* data = platformData();
 
-    data = platformData();
-
-    trampoline = new (std::nothrow) ThreadTrampoline(entry, arg);
+    ThreadTrampoline* trampoline =
+        new (std::nothrow) ThreadTrampoline(entry, arg);
     if (!trampoline)
         return false;
 
     // Use _beginthreadex and not CreateThread, because threads that are
     // created with the latter leak a small amount of memory when they use
     // certain msvcrt functions and then exit.
+    HANDLE handle;
+    unsigned int id;
     handle = _beginthreadex(NULL,
                             0,
                             ThreadTrampoline::start,
                             trampoline,
                             0,
                             &id);
-
-    if (handle == 0) {
+    if (handle == NULL) {
         delete trampoline;
         return false;
     }
 
     data->handle = (HANDLE) handle;
-    data->id = id;
 
-    running_ = true;
+    assert(id != NONE);
+    id_ = id;
+
     return true;
 }
 
 
 void Thread::join() {
-    assert(running_);
+    assert(running());
 
     HANDLE handle = platformData()->handle;
     if (WaitForSingleObject(handle, INFINITE) != WAIT_OBJECT_0)
@@ -109,27 +97,33 @@ void Thread::join() {
     BOOL success = CloseHandle(handle);
     assert(success);
 
-    running_ = false;
+    id_ = NONE;
 }
 
 
 void Thread::detach() {
-    assert(running_);
+    assert(running());
 
     BOOL success = CloseHandle(platformData()->handle);
     assert(success);
 
-    running_ = false;
+    id_ = NONE;
 }
 
 
-Thread::Id Thread::id() const {
-    assert(running_);
+Thread::~Thread() {
+    // In theory we could just CloseHandle(handle) here if the thread is still
+    // running, but that makes it more likely that bugs go unnoticed. So we
+    // require people to call .detach() to "forget" about a Thread object
+    // without waiting for it to finish.
+    assert(!running());
+}
 
-    Thread::Id id = platformData()->id;
-    assert(id != NONE);
 
-    return id;
+inline Thread::PlatformData* Thread::platformData() {
+    static_assert(sizeof platform_data_ >= sizeof(PlatformData),
+                  "platform_data_ is too small");
+    return reinterpret_cast<PlatformData*>(platform_data_);
 }
 
 
@@ -141,27 +135,13 @@ Thread::Id Thread::current() {
 }
 
 
-Thread::~Thread() {
-    // In theory we could just CloseHandle(handle) here if the thread is still
-    // running, but that makes it more likely that bugs go unnoticed. So we
-    // require people to call .detach() to "forget" about a Thread object
-    // without waiting for it to finish.
-    assert(!running_);
-}
-
-
-inline Thread::PlatformData* Thread::platformData() const {
-    static_assert(sizeof platform_data_ >= sizeof(PlatformData),
-                  "platform_data_ is too small");
-    const void** ptr = const_cast<const void**>(platform_data_);
-    return reinterpret_cast<PlatformData*>(ptr);
-}
-
-
 void Thread::setName(const char* name) {
     // Setting the thread name requires compiler support for structured
     // exceptions, so this only works when compiled with MSVC.
 #ifdef _MSC_VER
+    static const DWORD THREAD_NAME_EXCEPTION = 0x406D1388;
+    static const DWORD THREAD_NAME_INFO_TYPE = 0x1000;
+
     #pragma pack(push, 8)
     struct THREADNAME_INFO  {
         DWORD dwType;
@@ -171,16 +151,14 @@ void Thread::setName(const char* name) {
     };
     #pragma pack(pop)
 
-    static const DWORD setThreadNameException = 0x406D1388;
-
-    THREADNAME_INFO  info;
-    info.dwType = 0x1000;
+    THREADNAME_INFO info;
+    info.dwType = THREAD_NAME_INFO_TYPE;
     info.szName = name;
     info.dwThreadID = GetCurrentThreadId();
     info.dwFlags = 0;
 
     __try {
-        RaiseException(setThreadNameException,
+        RaiseException(THREAD_NAME_EXCEPTION,
                        0,
                        sizeof(info) / sizeof(ULONG_PTR),
                        (ULONG_PTR*) &info);

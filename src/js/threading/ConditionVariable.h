@@ -29,13 +29,22 @@ class ConditionVariable {
     void signal();
     void broadcast();
     void wait(Mutex& mutex);
-    bool wait(Mutex& mutex, uint64_t timeout);
+    bool wait(Mutex& mutex, uint64_t usec);
 
   private:
     PlatformData* platformData();
 
-    void* platform_data_[9];
     bool initialized_;
+
+#if defined(__linux__)
+    char platform_data[48]
+#elif defined(__APPLE__) && defined(__MACH__)
+    char platform_data[44];
+#elif defined(_WIN32)
+    void* platform_data_[9];
+#else
+#   error "Mutex platform data size isn't known for this platform"
+#endif
 };
 
 } // namespace threading

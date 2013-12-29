@@ -4,14 +4,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include <stdlib.h>
 #include <assert.h>
+#include <stdlib.h>
 
 #include <Windows.h>
 
-#include "MutexPlatformData.h"
 #include "threading/ConditionVariable.h"
 #include "threading/Mutex.h"
+#include "threading/windows/MutexPlatformData.h"
 
 
 namespace js {
@@ -225,8 +225,7 @@ bool ConditionVariable::initialize() {
     else
         initialized_ = platformData()->fallback.initialize();
 
-
-  return initialized_;
+    return initialized_;
 }
 
 
@@ -266,6 +265,20 @@ void ConditionVariable::wait(Mutex& mutex) {
 }
 
 
+bool ConditionVariable::wait(Mutex& mutex, uint64_t usec) {
+    assert(initialized_);
+
+    CRITICAL_SECTION* cs = &mutex.platformData()->cs;
+    DWORD msec = static_cast<DWORD>(usec / USEC_PER_MSEC);
+
+
+    if (nativeImports.supported())
+        return platformData()->native.wait(cs, msec);
+    else
+        return platformData()->fallback.wait(cs, msec);
+}
+
+
 ConditionVariable::~ConditionVariable() {
     if (!initialized_)
         return;
@@ -274,20 +287,6 @@ ConditionVariable::~ConditionVariable() {
         platformData()->native.destroy();
     else
         platformData()->fallback.destroy();
-}
-
-
-bool ConditionVariable::wait(Mutex& mutex, uint64_t timeout) {
-    assert(initialized_);
-
-    CRITICAL_SECTION* cs = &mutex.platformData()->cs;
-    DWORD msec = static_cast<DWORD>(timeout / USEC_PER_MSEC);
-
-
-    if (nativeImports.supported())
-        return platformData()->native.wait(cs, msec);
-    else
-        return platformData()->fallback.wait(cs, msec);
 }
 
 

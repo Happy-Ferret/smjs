@@ -23,7 +23,7 @@ class Thread {
     struct PlatformData;
 
     Thread()
-      : running_(false)
+      : id_(NONE)
     { };
 
     ~Thread();
@@ -33,19 +33,21 @@ class Thread {
     void join();
 
     inline bool running() const {
-        return running_;
+        return id_ != NONE;
     }
 
-    Thread::Id id() const;
-    static Thread::Id current();
+    inline Thread::Id id() const {
+        return id_;
+    }
 
+    static Thread::Id current();
     static void setName(const char* name);
 
   private:
-    PlatformData* platformData() const;
+    PlatformData* platformData();
 
-    void* platform_data_[2];
-    bool running_;
+    Thread::Id id_;
+    void* platform_data_[1];
 };
 
 

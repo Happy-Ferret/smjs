@@ -33,8 +33,17 @@ class Mutex {
     friend class ConditionVariable;
     PlatformData* platformData();
 
-    void* platform_data_[6];
     bool initialized_;
+
+#if defined(__linux__)
+    char platform_data[40];
+#elif defined(__APPLE__) && defined(__MACH__)
+    char platform_data[24];
+#elif defined(_WIN32)
+    void* platform_data_[6];
+#else
+#   error "Mutex platform data size isn't known for this platform"
+#endif
 };
 
 

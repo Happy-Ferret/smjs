@@ -5,11 +5,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <assert.h>
-
-#include <Windows.h>
+#include <pthread.h>
 
 #include "threading/Mutex.h"
-#include "threading/windows/MutexPlatformData.h"
+#include "threading/posix/MutexPlatformData.h"
 
 
 namespace js {
@@ -18,7 +17,8 @@ namespace threading {
 bool Mutex::initialize() {
     assert(!initialized_);
 
-    InitializeCriticalSection(&platformData()->cs);
+    if (pthread_mutex_init(&platformData()->ptMutex, NULL) != 0)
+        return false;
 
     initialized_ = true;
     return true;
@@ -26,18 +26,23 @@ bool Mutex::initialize() {
 
 
 void Mutex::lock() {
-    EnterCriticalSection(&platformData()->cs);
+    int r = pthread_mutex_lock(&platformData()->ptMutex);
+    assert(r == 0);
 }
 
 
 void Mutex::unlock() {
-    LeaveCriticalSection(&platformData()->cs);
+    int r = pthread_mutex_unlock(&platformData()->ptMutex);
+    assert(r == 0);
 }
 
 
 Mutex::~Mutex() {
-    if (initialized_)
-        DeleteCriticalSection(&platformData()->cs);
+    if (!initialized_)
+        return;
+
+    int r = pthread_mutex_destroy(&platformData()->ptMutex);
+    assert(r == 0);
 }
 
 
