@@ -1057,10 +1057,9 @@ class AutoLockForExclusiveAccess
 
     ~AutoLockForExclusiveAccess() {
         if (runtime->numExclusiveThreads) {
-            JS_ASSERT(static_cast<Thread::Id>(runtime->exclusiveAccessOwner) ==
-                      Thread::current());
+            JS_ASSERT(runtime->exclusiveAccessOwner == Thread::current());
 #ifdef DEBUG
-            runtime->exclusiveAccessOwner = Thread::none();
+            runtime->exclusiveAccessOwner = Thread::NONE;
 #endif
             runtime->exclusiveAccessLock.unlock();
         } else {

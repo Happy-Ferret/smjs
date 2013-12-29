@@ -2480,7 +2480,7 @@ GCHelperThread::threadMain(void *arg)
 void
 GCHelperThread::wait(ConditionVariable& which)
 {
-    rt->gcLockOwner = Thread::none();
+    rt->gcLockOwner = Thread::NONE;
     which.wait(rt->gcLock);
 #ifdef DEBUG
     rt->gcLockOwner = Thread::current();

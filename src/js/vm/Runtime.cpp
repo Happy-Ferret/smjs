@@ -125,14 +125,14 @@ JSRuntime::JSRuntime(JSUseHelperThreads useHelperThreads)
     operationCallback(nullptr),
 #ifdef JS_THREADSAFE
     operationCallbackLock(),
-    operationCallbackOwner(Thread::none()),
+    operationCallbackOwner(Thread::NONE),
 #else
     operationCallbackLockTaken(false),
 #endif
 #ifdef JS_WORKER_THREADS
     workerThreadState(nullptr),
     exclusiveAccessLock(),
-    exclusiveAccessOwner(Thread::none()),
+    exclusiveAccessOwner(Thread::NONE),
     mainThreadHasExclusiveAccess(false),
     numExclusiveThreads(0),
 #endif
@@ -142,7 +142,7 @@ JSRuntime::JSRuntime(JSUseHelperThreads useHelperThreads)
     defaultLocale(nullptr),
     defaultVersion_(JSVERSION_DEFAULT),
 #ifdef JS_THREADSAFE
-    ownerThread_(Thread::none()),
+    ownerThread_(Thread::NONE),
 #endif
     tempLifoAlloc(TEMP_LIFO_ALLOC_PRIMARY_CHUNK_SIZE),
     freeLifoAlloc(TEMP_LIFO_ALLOC_PRIMARY_CHUNK_SIZE),
@@ -255,7 +255,7 @@ JSRuntime::JSRuntime(JSUseHelperThreads useHelperThreads)
     haveCreatedContext(false),
     data(nullptr),
     gcLock(),
-    gcLockOwner(Thread::none()),
+    gcLockOwner(Thread::NONE),
     gcHelperThread(thisFromCtor()),
     signalHandlersInstalled_(false),
     defaultFreeOp_(thisFromCtor(), false),
@@ -473,7 +473,7 @@ JSRuntime::~JSRuntime()
 #ifdef JS_WORKER_THREADS
     js_delete(workerThreadState);
 
-    JS_ASSERT(!static_cast<Thread::Id>(exclusiveAccessOwner));
+    JS_ASSERT(exclusiveAccessOwner == Thread::NONE);
 
     // Avoid bogus asserts during teardown.
     JS_ASSERT(!numExclusiveThreads);
@@ -937,14 +937,13 @@ JSRuntime::assertCanLock(RuntimeLock which)
     // it must be done in the order below.
     switch (which) {
       case ExclusiveAccessLock:
-        JS_ASSERT(static_cast<Thread::Id>(exclusiveAccessOwner) !=
-                  Thread::current());
+        JS_ASSERT(exclusiveAccessOwner != Thread::current());
       case WorkerThreadStateLock:
         JS_ASSERT_IF(workerThreadState, !workerThreadState->isLocked());
       case OperationCallbackLock:
         JS_ASSERT(!currentThreadOwnsOperationCallbackLock());
       case GCLock:
-        JS_ASSERT(static_cast<Thread::Id>(gcLockOwner) != Thread::current());
+        JS_ASSERT(gcLockOwner != Thread::current());
         break;
       default:
         MOZ_CRASH();

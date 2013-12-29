@@ -769,7 +769,7 @@ struct JSRuntime : public JS::shadow::Runtime,
         ~AutoLockForOperationCallback() {
             JS_ASSERT(rt->currentThreadOwnsOperationCallbackLock());
 #ifdef JS_THREADSAFE
-            rt->operationCallbackOwner = Thread::none();
+            rt->operationCallbackOwner = Thread::NONE;
             rt->operationCallbackLock.unlock();
 #else
             rt->operationCallbackLockTaken = false;
@@ -819,7 +819,7 @@ struct JSRuntime : public JS::shadow::Runtime,
     bool currentThreadHasExclusiveAccess() {
 #if defined(JS_WORKER_THREADS) && defined(DEBUG)
         return (!numExclusiveThreads && mainThreadHasExclusiveAccess) ||
-            static_cast<Thread::Id>(exclusiveAccessOwner) == Thread::current();
+                exclusiveAccessOwner == Thread::current();
 #else
         return true;
 #endif
@@ -1369,7 +1369,7 @@ struct JSRuntime : public JS::shadow::Runtime,
 #ifdef JS_THREADSAFE
         assertCanLock(GCLock);
         gcLock.lock();
-        JS_ASSERT(!static_cast<Thread::Id>(gcLockOwner));
+        JS_ASSERT(gcLockOwner == Thread::NONE);
 #ifdef DEBUG
         gcLockOwner = Thread::current();
 #endif
@@ -1378,8 +1378,8 @@ struct JSRuntime : public JS::shadow::Runtime,
 
     void unlockGC() {
 #ifdef JS_THREADSAFE
-        JS_ASSERT(static_cast<Thread::Id>(gcLockOwner) == Thread::current());
-        gcLockOwner = Thread::none();
+        JS_ASSERT(gcLockOwner == Thread::current());
+        gcLockOwner = Thread::NONE;
         gcLock.unlock();
 #endif
     }

@@ -15,8 +15,11 @@ namespace threading {
 
 class Thread {
   public:
-    class Id;
+    typedef uintptr_t Id;
+    static const Id NONE = 0;
+
     typedef void (*Entry)(void* arg);
+
     struct PlatformData;
 
     Thread()
@@ -34,11 +37,9 @@ class Thread {
     }
 
     Thread::Id id() const;
+    static Thread::Id current();
 
     static void setName(const char* name);
-
-    static Id current();
-    static Id none();
 
   private:
     PlatformData* platformData() const;
@@ -47,38 +48,6 @@ class Thread {
     bool running_;
 };
 
-
-class Thread::Id {
-  public:
-    inline Id(const Id& that):
-        data_(that.data_)
-    { }
-
-    bool operator ==(const Id& that);
-    bool operator !=(const Id& that);
-    bool operator !();
-
-    // Not recommended, because we can't ensure that two thread ids have the
-    // same integral value if they refer to the same thread. Ideally we'd mark
-    // this cast operator as explicit, but compiler support for this C++11
-    // feature is still very limited.
-    inline operator uintptr_t() {
-      if (!*this)
-          return 0;
-      else
-          return data_;
-    }
-
-  private:
-    friend class Thread;
-    inline explicit Id(uintptr_t data)
-        : data_(data)
-    { }
-
-    Id();
-
-    uintptr_t data_;
-};
 
 } // namespace threading
 } // namespace js

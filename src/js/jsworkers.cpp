@@ -451,7 +451,7 @@ WorkerThreadState::unlock()
 {
     JS_ASSERT(isLocked());
 #ifdef DEBUG
-    lockOwner = Thread::none();
+    lockOwner = Thread::NONE;
 #endif
     workerLock.unlock();
 }
@@ -460,7 +460,7 @@ WorkerThreadState::unlock()
 bool
 WorkerThreadState::isLocked()
 {
-    return static_cast<Thread::Id>(lockOwner) == Thread::current();
+    return lockOwner == Thread::current();
 }
 #endif
 
@@ -469,7 +469,7 @@ WorkerThreadState::wait(CondVar which, uint32_t millis)
 {
     JS_ASSERT(isLocked());
 #ifdef DEBUG
-    lockOwner = Thread::none();
+    lockOwner = Thread::NONE;
 #endif
     ConditionVariable* cv;
     if (which == CONSUMER)

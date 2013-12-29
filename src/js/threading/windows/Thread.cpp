@@ -17,9 +17,6 @@
 namespace js {
 namespace threading {
 
-static const uintptr_t ThreadIdNone = ~static_cast<uintptr_t>(0);
-
-
 struct Thread::PlatformData {
     HANDLE handle;
     unsigned int id;
@@ -128,17 +125,19 @@ void Thread::detach() {
 
 Thread::Id Thread::id() const {
     assert(running_);
-    return Id(platformData()->id);
-}
 
+    Thread::Id id = platformData()->id;
+    assert(id != NONE);
 
-Thread::Id Thread::none() {
-    return Id(ThreadIdNone);
+    return id;
 }
 
 
 Thread::Id Thread::current() {
-    return Id(GetCurrentThreadId());
+    Thread::Id id = GetCurrentThreadId();
+    assert(id != NONE);
+
+    return id;
 }
 
 
@@ -160,7 +159,8 @@ inline Thread::PlatformData* Thread::platformData() const {
 
 
 void Thread::setName(const char* name) {
-    // Setting the thread name is only supported when compiled with MSVC.
+    // Setting the thread name requires compiler support for structured
+    // exceptions, so this only works when compiled with MSVC.
 #ifdef _MSC_VER
     #pragma pack(push, 8)
     struct THREADNAME_INFO  {
@@ -189,22 +189,6 @@ void Thread::setName(const char* name) {
     }
 #endif // _MSC_VER
 }
-
-
-bool Thread::Id::operator ==(const Thread::Id& that) {
-    return data_ == that.data_;
-}
-
-
-bool Thread::Id::operator !=(const Thread::Id& that) {
-    return data_ != that.data_;
-}
-
-
-bool Thread::Id::operator !() {
-    return data_ == ThreadIdNone;
-}
-
 
 } // namespace threading
 } // namepsace js

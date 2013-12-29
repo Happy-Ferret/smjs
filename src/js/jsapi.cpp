@@ -5930,9 +5930,6 @@ JS_PUBLIC_API(intptr_t)
 JS_GetCurrentThread()
 {
 #ifdef JS_THREADSAFE
-    // This is not great - Thread::Id encapsulates a pthread_t. In theory
-    // pthread_t's shouldn't be compared with the equality (==) operator; the
-    // user is supposed to use pthread_equal to compare them.
     return Thread::current();
 #else
     return 0;

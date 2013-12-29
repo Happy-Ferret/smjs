@@ -82,7 +82,7 @@ class WorkerThreadState
     Vector<SourceCompressionTask *, 0, SystemAllocPolicy> compressionWorklist;
 
     WorkerThreadState(JSRuntime *rt)
-      : lockOwner(Thread::none())
+      : lockOwner(Thread::NONE)
     {
         mozilla::PodZero(this);
         runtime = rt;
