@@ -1,13 +1,17 @@
+.DS_Store
 *.a
 *.o
 *.opensdf
+*.pyc
 *.sdf
 *.sln
 *.suo
 *.vcxproj
 *.vcxproj.filters
 *.vcxproj.user
+*.*~
 
+/selfhosted.js
 /*.Makefile
 /*.mk
 
@@ -18,3 +22,4 @@
 /gyp-mac-tool
 /ipch
 /out
+/smjs.xcodeproj
