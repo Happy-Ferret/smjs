@@ -18,6 +18,8 @@
 #include <wchar.h>
 #include "Char16.h"
 
+#include "mozilla/Char16.h"
+
 namespace mozilla {
 
 /* Forward declarations. */
