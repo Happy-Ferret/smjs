@@ -4,15 +4,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "vm/SelfHosting.h"
+
 #include "jscntxt.h"
 #include "jscompartment.h"
 #include "jsfriendapi.h"
 #include "jshashutil.h"
 #include "jsobj.h"
+#include "jswrapper.h"
 #include "selfhosted.out.h"
 
 #include "builtin/Intl.h"
-#include "builtin/ParallelArray.h"
 #include "builtin/TypedObject.h"
 #include "gc/Marking.h"
 #include "vm/ForkJoin.h"
@@ -308,27 +310,6 @@ intrinsic_ForkJoinSlices(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     args.rval().setInt32(ForkJoinSlices(cx));
-    return true;
-}
-
-/*
- * NewParallelArray(init, ...args): Creates a new parallel array using
- * an initialization function |init|. All subsequent arguments are
- * passed to |init|. The new instance will be passed as the |this|
- * argument.
- */
-bool
-js::intrinsic_NewParallelArray(JSContext *cx, unsigned argc, Value *vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-
-    JS_ASSERT(args[0].isObject() && args[0].toObject().is<JSFunction>());
-
-    RootedFunction init(cx, &args[0].toObject().as<JSFunction>());
-    CallArgs args0 = CallArgsFromVp(argc - 1, vp + 1);
-    if (!js::ParallelArrayObject::constructHelper(cx, &init, args0))
-        return false;
-    args.rval().set(args0.rval());
     return true;
 }
 
@@ -640,7 +621,6 @@ static const JSFunctionSpec intrinsic_functions[] = {
 
     JS_FN("ForkJoin",                intrinsic_ForkJoin,                2,0),
     JS_FN("ForkJoinSlices",          intrinsic_ForkJoinSlices,          0,0),
-    JS_FN("NewParallelArray",        intrinsic_NewParallelArray,        3,0),
     JS_FN("NewDenseArray",           intrinsic_NewDenseArray,           1,0),
     JS_FN("ShouldForceSequential",   intrinsic_ShouldForceSequential,   0,0),
     JS_FN("ParallelTestsShouldPass", intrinsic_ParallelTestsShouldPass, 0,0),
@@ -677,6 +657,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
               JSNativeThreadSafeWrapper<js::Memcpy>,
               &js::MemcpyJitInfo, 5, 0),
     JS_FN("GetTypedObjectModule", js::GetTypedObjectModule, 0, 0),
+    JS_FN("GetFloat32x4TypeObject", js::GetFloat32x4TypeObject, 0, 0),
+    JS_FN("GetInt32x4TypeObject", js::GetInt32x4TypeObject, 0, 0),
 
 #define LOAD_AND_STORE_SCALAR_FN_DECLS(_constant, _type, _name)               \
     JS_FNINFO("Store_" #_name,                                                \
@@ -928,7 +910,7 @@ CloneObject(JSContext *cx, HandleObject srcObj, CloneMemory &clonedObjects)
     }
     if (!clone)
         return nullptr;
-    if (!p.add(clonedObjects, srcObj, clone))
+    if (!p.add(cx, clonedObjects, srcObj, clone))
         return nullptr;
     if (!CloneProperties(cx, srcObj, clone, clonedObjects)) {
         clonedObjects.remove(srcObj);
@@ -981,10 +963,11 @@ JSRuntime::cloneSelfHostedFunctionScript(JSContext *cx, Handle<PropertyName*> na
     JSScript *cscript = CloneScript(cx, NullPtr(), targetFun, sourceScript);
     if (!cscript)
         return false;
-    targetFun->setScript(cscript);
     cscript->setFunction(targetFun);
-    JS_ASSERT(sourceFun->nargs == targetFun->nargs);
-    targetFun->flags = sourceFun->flags | JSFunction::EXTENDED;
+
+    JS_ASSERT(sourceFun->nargs() == targetFun->nargs());
+    targetFun->setFlags(sourceFun->flags() | JSFunction::EXTENDED);
+    targetFun->setScript(cscript);
     return true;
 }
 
@@ -1011,6 +994,63 @@ JSRuntime::cloneSelfHostedValue(JSContext *cx, Handle<PropertyName*> name, Mutab
     return true;
 }
 
+class OpaqueWrapper : public CrossCompartmentSecurityWrapper
+{
+  public:
+    OpaqueWrapper() : CrossCompartmentSecurityWrapper(0) {}
+    virtual bool enter(JSContext *cx, HandleObject wrapper, HandleId id,
+                       Wrapper::Action act, bool *bp) MOZ_OVERRIDE
+    {
+        *bp = false;
+        return false;
+    }
+    static OpaqueWrapper singleton;
+};
+
+OpaqueWrapper OpaqueWrapper::singleton;
+
+class OpaqueWrapperWithCall : public OpaqueWrapper
+{
+  public:
+    OpaqueWrapperWithCall() : OpaqueWrapper() {}
+    virtual bool enter(JSContext *cx, HandleObject wrapper, HandleId id,
+                       Wrapper::Action act, bool *bp) MOZ_OVERRIDE
+    {
+        if (act != Wrapper::CALL) {
+            *bp = false;
+            return false;
+        }
+        return true;
+    }
+    static OpaqueWrapperWithCall singleton;
+};
+
+OpaqueWrapperWithCall OpaqueWrapperWithCall::singleton;
+
+static JSObject *
+SelfHostingWrapObjectCallback(JSContext *cx, HandleObject existing, HandleObject obj,
+                              HandleObject proto, HandleObject parent, unsigned flags)
+{
+    RootedObject objGlobal(cx, &obj->global());
+    bool wrappingSelfHostedFunction = cx->runtime()->isSelfHostingGlobal(objGlobal);
+    JS_ASSERT_IF(!wrappingSelfHostedFunction, cx->runtime()->isSelfHostingGlobal(cx->global()));
+
+    OpaqueWrapper *handler = wrappingSelfHostedFunction
+                             ? &OpaqueWrapperWithCall::singleton
+                             : &OpaqueWrapper::singleton;
+    if (existing)
+        return Wrapper::Renew(cx, existing, obj, handler);
+    else
+        return Wrapper::New(cx, obj, parent, handler);
+}
+
+const JSWrapObjectCallbacks
+js::SelfHostingWrapObjectCallbacks = {
+    SelfHostingWrapObjectCallback,
+    nullptr,
+    nullptr
+};
+
 bool
 JSRuntime::maybeWrappedSelfHostedFunction(JSContext *cx, HandleId id, MutableHandleValue funVal)
 {
@@ -1033,7 +1073,7 @@ JSFunction *
 js::SelfHostedFunction(JSContext *cx, HandlePropertyName propName)
 {
     RootedValue func(cx);
-    if (!cx->global()->getIntrinsicValue(cx, propName, &func))
+    if (!GlobalObject::getIntrinsicValue(cx, cx->global(), propName, &func))
         return nullptr;
 
     JS_ASSERT(func.isObject());

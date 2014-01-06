@@ -339,16 +339,18 @@ JS_PutPropertyDescArray(JSContext *cx, JSPropertyDescArray *pda);
 class JS_PUBLIC_API(JSAbstractFramePtr)
 {
     uintptr_t ptr_;
+    jsbytecode *pc_;
 
   protected:
     JSAbstractFramePtr()
-      : ptr_(0)
+      : ptr_(0), pc_(nullptr)
     { }
 
   public:
-    explicit JSAbstractFramePtr(void *raw);
+    JSAbstractFramePtr(void *raw, jsbytecode *pc);
 
     uintptr_t raw() const { return ptr_; }
+    jsbytecode *pc() const { return pc_; }
 
     operator bool() const { return !!ptr_; }
 
@@ -493,12 +495,6 @@ JS_DefineProfilingFunctions(JSContext *cx, JSObject *obj);
 /* Defined in vm/Debugger.cpp. */
 extern JS_PUBLIC_API(bool)
 JS_DefineDebuggerObject(JSContext *cx, JSObject *obj);
-
-extern JS_PUBLIC_API(void)
-JS_DumpBytecode(JSContext *cx, JSScript *script);
-
-extern JS_PUBLIC_API(void)
-JS_DumpCompartmentBytecode(JSContext *cx);
 
 extern JS_PUBLIC_API(void)
 JS_DumpPCCounts(JSContext *cx, JSScript *script);

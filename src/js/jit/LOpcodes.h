@@ -22,7 +22,6 @@
     _(TableSwitch)                  \
     _(TableSwitchV)                 \
     _(Goto)                         \
-    _(NewParallelArray)             \
     _(NewArray)                     \
     _(NewObject)                    \
     _(NewSlots)                     \
@@ -280,6 +279,7 @@
     _(AsmJSCall)                    \
     _(AsmJSCheckOverRecursed)       \
     _(CheckInterruptPar)            \
+    _(RecompileCheck)               \
     _(AssertRangeI)                 \
     _(AssertRangeD)                 \
     _(AssertRangeF)                 \

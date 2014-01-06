@@ -191,7 +191,7 @@ namespace js {
 // of operation.
 enum ForkJoinMode {
     // WARNING: If you change this enum, you MUST update
-    // ForkJoinMode() in ParallelArray.js
+    // ForkJoinMode() in Utilities.js
 
     // The "normal" behavior: attempt parallel, fallback to
     // sequential.  If compilation is ongoing in a helper thread, then
@@ -867,8 +867,19 @@ js::ParallelDo::compileForParallelExecution(ExecutionStatus *status)
                 }
             }
         }
-        if (allScriptsPresent)
+
+        if (allScriptsPresent) {
+            // For testing modes, we want to make sure that all off thread
+            // compilation tasks are finished, so we don't race with
+            // off-main-thread-compilation setting an interrupt flag while we
+            // are in the middle of a test, causing unexpected bailouts.
+            if (mode_ != ForkJoinModeNormal) {
+                StopAllOffThreadCompilations(cx_->compartment());
+                if (!js_HandleExecutionInterrupt(cx_))
+                    return fatalError(status);
+            }
             break;
+        }
     }
 
     Spew(SpewCompile, "Compilation complete (final worklist length %d)",
@@ -1262,7 +1273,7 @@ js::ParallelDo::hasScript(Vector<types::RecompileInfo> &scripts, JSScript *scrip
 template <uint32_t maxArgc>
 class ParallelIonInvoke
 {
-    EnterIonCode enter_;
+    EnterJitCode enter_;
     void *jitcode_;
     void *calleeToken_;
     Value argv_[maxArgc + 2];
@@ -1285,7 +1296,7 @@ class ParallelIonInvoke
 
         // Find JIT code pointer.
         IonScript *ion = callee->nonLazyScript()->parallelIonScript();
-        IonCode *code = ion->method();
+        JitCode *code = ion->method();
         jitcode_ = code->raw();
         enter_ = rt->jitRuntime()->enterIon();
         calleeToken_ = CalleeToToken(callee);
@@ -2207,8 +2218,8 @@ js::ParallelTestsShouldPass(JSContext *cx)
 {
     return jit::IsIonEnabled(cx) &&
            jit::IsBaselineEnabled(cx) &&
-           !jit::js_IonOptions.eagerCompilation &&
-           jit::js_IonOptions.baselineUsesBeforeCompile != 0 &&
+           !jit::js_JitOptions.eagerCompilation &&
+           jit::js_JitOptions.baselineUsesBeforeCompile != 0 &&
            cx->runtime()->gcZeal() == 0;
 }
 

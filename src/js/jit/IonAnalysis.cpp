@@ -12,6 +12,7 @@
 #include "jit/BaselineJIT.h"
 #include "jit/Ion.h"
 #include "jit/IonBuilder.h"
+#include "jit/IonOptimizationLevels.h"
 #include "jit/LIR.h"
 #include "jit/Lowering.h"
 #include "jit/MIRGraph.h"
@@ -108,7 +109,6 @@ jit::EliminateDeadResumePointOperands(MIRGenerator *mir, MIRGraph &graph)
             for (MUseDefIterator uses(*ins); uses; uses++) {
                 if (uses.def()->block() != *block ||
                     uses.def()->isBox() ||
-                    uses.def()->isPassArg() ||
                     uses.def()->isPhi())
                 {
                     maxDefinition = UINT32_MAX;
@@ -222,11 +222,10 @@ IsPhiObservable(MPhi *phi, Observability observe)
     if (fun && slot == info.thisSlot())
         return true;
 
-    // If the function is heavyweight, and the Phi is of the |scopeChain|
-    // value, and the function may need an arguments object, then make sure
-    // to preserve the scope chain, because it may be needed to construct the
-    // arguments object during bailout.
-    if (fun && fun->isHeavyweight() && info.hasArguments() && slot == info.scopeChainSlot())
+    // If the function may need an arguments object, then make sure to preserve
+    // the scope chain, because it may be needed to construct the arguments
+    // object during bailout.
+    if (fun && info.hasArguments() && slot == info.scopeChainSlot())
         return true;
 
     // If the Phi is one of the formal argument, and we are using an argument
@@ -973,8 +972,6 @@ TypeAnalyzer::checkFloatCoherency()
         for (MDefinitionIterator def(*block); def; def++) {
             if (def->type() != MIRType_Float32)
                 continue;
-            if (def->isPassArg()) // no check for PassArg as it is broken, see bug 915479
-                continue;
 
             for (MUseDefIterator use(*def); use; use++) {
                 MDefinition *consumer = use.def();
@@ -1253,29 +1250,19 @@ CheckPredecessorImpliesSuccessor(MBasicBlock *A, MBasicBlock *B)
 }
 
 static bool
-CheckOperandImpliesUse(MInstruction *ins, MDefinition *operand)
+CheckOperandImpliesUse(MNode *n, MDefinition *operand)
 {
     for (MUseIterator i = operand->usesBegin(); i != operand->usesEnd(); i++) {
-        if (i->consumer()->isDefinition() && i->consumer()->toDefinition() == ins)
+        if (i->consumer() == n)
             return true;
     }
     return false;
 }
 
 static bool
-CheckUseImpliesOperand(MInstruction *ins, MUse *use)
+CheckUseImpliesOperand(MDefinition *def, MUse *use)
 {
-    MNode *consumer = use->consumer();
-    uint32_t index = use->index();
-
-    if (consumer->isDefinition()) {
-        MDefinition *def = consumer->toDefinition();
-        return (def->getOperand(index) == ins);
-    }
-
-    JS_ASSERT(consumer->isResumePoint());
-    MResumePoint *res = consumer->toResumePoint();
-    return (res->getOperand(index) == ins);
+    return use->consumer()->getOperand(use->index()) == def;
 }
 #endif // DEBUG
 
@@ -1283,10 +1270,26 @@ void
 jit::AssertBasicGraphCoherency(MIRGraph &graph)
 {
 #ifdef DEBUG
+    JS_ASSERT(graph.entryBlock()->numPredecessors() == 0);
+    JS_ASSERT(graph.entryBlock()->phisEmpty());
+    JS_ASSERT(!graph.entryBlock()->unreachable());
+
+    if (MBasicBlock *osrBlock = graph.osrBlock()) {
+        JS_ASSERT(osrBlock->numPredecessors() == 0);
+        JS_ASSERT(osrBlock->phisEmpty());
+        JS_ASSERT(osrBlock != graph.entryBlock());
+        JS_ASSERT(!osrBlock->unreachable());
+    }
+
+    if (MResumePoint *resumePoint = graph.entryResumePoint())
+        JS_ASSERT(resumePoint->block() == graph.entryBlock());
+
     // Assert successor and predecessor list coherency.
     uint32_t count = 0;
     for (MBasicBlockIterator block(graph.begin()); block != graph.end(); block++) {
         count++;
+
+        JS_ASSERT(&block->graph() == &graph);
 
         for (size_t i = 0; i < block->numSuccessors(); i++)
             JS_ASSERT(CheckSuccessorImpliesPredecessor(*block, block->getSuccessor(i)));
@@ -1295,13 +1298,30 @@ jit::AssertBasicGraphCoherency(MIRGraph &graph)
             JS_ASSERT(CheckPredecessorImpliesSuccessor(*block, block->getPredecessor(i)));
 
         // Assert that use chains are valid for this instruction.
-        for (MInstructionIterator ins = block->begin(); ins != block->end(); ins++) {
-            for (uint32_t i = 0, e = ins->numOperands(); i < e; i++)
-                JS_ASSERT(CheckOperandImpliesUse(*ins, ins->getOperand(i)));
+        for (MDefinitionIterator iter(*block); iter; iter++) {
+            for (uint32_t i = 0, e = iter->numOperands(); i < e; i++)
+                JS_ASSERT(CheckOperandImpliesUse(*iter, iter->getOperand(i)));
         }
-        for (MInstructionIterator ins = block->begin(); ins != block->end(); ins++) {
-            for (MUseIterator i(ins->usesBegin()); i != ins->usesEnd(); i++)
-                JS_ASSERT(CheckUseImpliesOperand(*ins, *i));
+        for (MResumePointIterator iter(block->resumePointsBegin()); iter != block->resumePointsEnd(); iter++) {
+            for (uint32_t i = 0, e = iter->numOperands(); i < e; i++) {
+                if (iter->getUseFor(i)->hasProducer())
+                    JS_ASSERT(CheckOperandImpliesUse(*iter, iter->getOperand(i)));
+            }
+        }
+        for (MPhiIterator phi(block->phisBegin()); phi != block->phisEnd(); phi++) {
+            JS_ASSERT(phi->numOperands() == block->numPredecessors());
+        }
+        for (MDefinitionIterator iter(*block); iter; iter++) {
+            JS_ASSERT(iter->block() == *block);
+            for (MUseIterator i(iter->usesBegin()); i != iter->usesEnd(); i++)
+                JS_ASSERT(CheckUseImpliesOperand(*iter, *i));
+
+            if (iter->isInstruction()) {
+                if (MResumePoint *resume = iter->toInstruction()->resumePoint()) {
+                    if (MInstruction *ins = resume->instruction())
+                        JS_ASSERT(ins->block() == iter->block());
+                }
+            }
         }
     }
 
@@ -1333,7 +1353,7 @@ void
 jit::AssertGraphCoherency(MIRGraph &graph)
 {
 #ifdef DEBUG
-    if (!js_IonOptions.checkGraphConsistency)
+    if (!js_JitOptions.checkGraphConsistency)
         return;
     AssertBasicGraphCoherency(graph);
     AssertReversePostOrder(graph);
@@ -1348,7 +1368,7 @@ jit::AssertExtendedGraphCoherency(MIRGraph &graph)
     // are split)
 
 #ifdef DEBUG
-    if (!js_IonOptions.checkGraphConsistency)
+    if (!js_JitOptions.checkGraphConsistency)
         return;
     AssertGraphCoherency(graph);
 
@@ -2021,14 +2041,14 @@ AnalyzePoppedThis(JSContext *cx, types::TypeObject *type,
         if (!definitelyExecuted)
             return true;
 
-        if (!types::AddClearDefiniteGetterSetterForPrototypeChain(cx, type, NameToId(setprop->name()))) {
+        RootedId id(cx, NameToId(setprop->name()));
+        if (!types::AddClearDefiniteGetterSetterForPrototypeChain(cx, type, id)) {
             // The prototype chain already contains a getter/setter for this
             // property, or type information is too imprecise.
             return true;
         }
 
         DebugOnly<unsigned> slotSpan = baseobj->slotSpan();
-        RootedId id(cx, NameToId(setprop->name()));
         RootedValue value(cx, UndefinedValue());
         if (!DefineNativeProperty(cx, baseobj, id, value, nullptr, nullptr,
                                   JSPROP_ENUMERATE, 0, 0))
@@ -2154,20 +2174,25 @@ jit::AnalyzeNewScriptProperties(JSContext *cx, JSFunction *fun,
     MIRGraph graph(&temp);
     CompileInfo info(script, fun,
                      /* osrPc = */ nullptr, /* constructing = */ false,
-                     DefinitePropertiesAnalysis);
+                     DefinitePropertiesAnalysis,
+                     script->needsArgsObj());
 
     AutoTempAllocatorRooter root(cx, &temp);
+
+    const OptimizationInfo *optimizationInfo = js_IonOptimizations.get(Optimization_Normal);
 
     types::CompilerConstraintList *constraints = types::NewCompilerConstraintList(temp);
     BaselineInspector inspector(script);
     IonBuilder builder(cx, CompileCompartment::get(cx->compartment()), &temp, &graph, constraints,
-                       &inspector, &info, /* baselineFrame = */ nullptr);
+                       &inspector, &info, optimizationInfo, /* baselineFrame = */ nullptr);
 
     if (!builder.build()) {
         if (builder.abortReason() == AbortReason_Alloc)
             return false;
         return true;
     }
+
+    types::FinishDefinitePropertiesAnalysis(cx, constraints);
 
     if (!SplitCriticalEdges(graph))
         return false;
