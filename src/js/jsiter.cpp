@@ -978,9 +978,12 @@ js::CloseIterator(JSContext *cx, HandleObject obj)
 bool
 js::UnwindIteratorForException(JSContext *cx, HandleObject obj)
 {
-    RootedValue v(cx, cx->getPendingException());
+    RootedValue v(cx);
+    bool getOk = cx->getPendingException(&v);
     cx->clearPendingException();
     if (!CloseIterator(cx, obj))
+        return false;
+    if (!getOk)
         return false;
     cx->setPendingException(v);
     return true;
@@ -1123,7 +1126,7 @@ bool
 js_SuppressDeletedElement(JSContext *cx, HandleObject obj, uint32_t index)
 {
     RootedId id(cx);
-    if (!IndexToId(cx, index, id.address()))
+    if (!IndexToId(cx, index, &id))
         return false;
     return js_SuppressDeletedProperty(cx, obj, id);
 }
@@ -1195,7 +1198,12 @@ js_IteratorMore(JSContext *cx, HandleObject iterobj, MutableHandleValue rval)
             return false;
         if (!Invoke(cx, ObjectValue(*iterobj), rval, 0, nullptr, rval)) {
             /* Check for StopIteration. */
-            if (!cx->isExceptionPending() || !JS_IsStopIteration(cx->getPendingException()))
+            if (!cx->isExceptionPending())
+                return false;
+            RootedValue exception(cx);
+            if (!cx->getPendingException(&exception))
+                return false;
+            if (!JS_IsStopIteration(exception))
                 return false;
 
             cx->clearPendingException();
@@ -1937,6 +1945,7 @@ GlobalObject::initIteratorClasses(JSContext *cx, Handle<GlobalObject *> global)
         if (!LinkConstructorAndPrototype(cx, genFunction, genFunctionProto))
             return false;
 
+        AutoLockForCompilation lock(cx);
         global->setSlot(STAR_GENERATOR_OBJECT_PROTO, ObjectValue(*genObjectProto));
         global->setConstructor(JSProto_GeneratorFunction, ObjectValue(*genFunction));
         global->setPrototype(JSProto_GeneratorFunction, ObjectValue(*genFunctionProto));

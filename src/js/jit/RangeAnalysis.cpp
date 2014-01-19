@@ -413,7 +413,9 @@ Range::intersect(TempAllocator &alloc, const Range *lhs, const Range *rhs, bool 
     // Instead, we should use it to eliminate the dead block.
     // (Bug 765127)
     if (newUpper < newLower) {
-        *emptyRange = true;
+        // If both ranges can be NaN, the result can still be NaN.
+        if (!lhs->canBeNaN() || !rhs->canBeNaN())
+            *emptyRange = true;
         return nullptr;
     }
 
@@ -994,7 +996,7 @@ MPhi::computeRange(TempAllocator &alloc)
         return;
 
     Range *range = nullptr;
-    JS_ASSERT(getOperand(0)->op() != MDefinition::Op_OsrValue);
+    JS_ASSERT(!isOSRLikeValue(getOperand(0)));
     for (size_t i = 0, e = numOperands(); i < e; i++) {
         if (getOperand(i)->block()->unreachable()) {
             IonSpew(IonSpew_Range, "Ignoring unreachable input %d", getOperand(i)->id());
@@ -2040,7 +2042,7 @@ RangeAnalysis::analyze()
 bool
 RangeAnalysis::addRangeAssertions()
 {
-    if (!js_IonOptions.checkRangeAnalysis)
+    if (!js_JitOptions.checkRangeAnalysis)
         return true;
 
     // Check the computed range for this instruction, if the option is set. Note
@@ -2065,10 +2067,6 @@ RangeAnalysis::addRangeAssertions()
 
             // Don't insert assertions if there's nothing interesting to assert.
             if (r.isUnknown() || (ins->type() == MIRType_Int32 && r.isUnknownInt32()))
-                continue;
-
-            // Range-checking PassArgs breaks stuff.
-            if (ins->isPassArg())
                 continue;
 
             MAssertRange *guard = MAssertRange::New(alloc(), ins, new(alloc()) Range(r));

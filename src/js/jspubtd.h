@@ -34,9 +34,9 @@ class Rooted;
 
 class JS_PUBLIC_API(AutoGCRooter);
 
-class JS_PUBLIC_API(CompileOptions);
-class JS_PUBLIC_API(ReadOnlyCompileOptions);
-class JS_PUBLIC_API(OwningCompileOptions);
+class JS_FRIEND_API(CompileOptions);
+class JS_FRIEND_API(ReadOnlyCompileOptions);
+class JS_FRIEND_API(OwningCompileOptions);
 class JS_PUBLIC_API(CompartmentOptions);
 
 struct Zone;
@@ -130,7 +130,7 @@ typedef enum {
      * it implements JSTraceCallback.
      */
     JSTRACE_LAZY_SCRIPT,
-    JSTRACE_IONCODE,
+    JSTRACE_JITCODE,
     JSTRACE_SHAPE,
     JSTRACE_BASE_SHAPE,
     JSTRACE_TYPE_OBJECT,
@@ -301,8 +301,9 @@ enum ThingRootKind
     THING_ROOT_BASE_SHAPE,
     THING_ROOT_TYPE_OBJECT,
     THING_ROOT_STRING,
-    THING_ROOT_ION_CODE,
+    THING_ROOT_JIT_CODE,
     THING_ROOT_SCRIPT,
+    THING_ROOT_LAZY_SCRIPT,
     THING_ROOT_ID,
     THING_ROOT_PROPERTY_ID,
     THING_ROOT_VALUE,

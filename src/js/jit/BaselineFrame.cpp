@@ -36,7 +36,7 @@ BaselineFrame::trace(JSTracer *trc)
 
     // Mark return value.
     if (hasReturnValue())
-        gc::MarkValueRoot(trc, returnValue(), "baseline-rval");
+        gc::MarkValueRoot(trc, returnValue().address(), "baseline-rval");
 
     if (isEvalFrame())
         gc::MarkScriptRoot(trc, &evalScript_, "baseline-evalscript");
@@ -112,11 +112,6 @@ BaselineFrame::initForOsr(StackFrame *fp, uint32_t numStackValues)
 
     if (fp->hasCallObjUnchecked())
         flags_ |= BaselineFrame::HAS_CALL_OBJ;
-
-    if (fp->hasBlockChain()) {
-        flags_ |= BaselineFrame::HAS_BLOCKCHAIN;
-        blockChain_ = &fp->blockChain();
-    }
 
     if (fp->isEvalFrame()) {
         flags_ |= BaselineFrame::EVAL;

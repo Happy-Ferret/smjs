@@ -77,7 +77,7 @@ StackFrame::initCallFrame(JSContext *cx, StackFrame *prev, jsbytecode *prevpc, V
     JS_ASSERT(callee.nonLazyScript() == script);
 
     /* Initialize stack frame members. */
-    flags_ = FUNCTION | HAS_SCOPECHAIN | HAS_BLOCKCHAIN | flagsArg;
+    flags_ = FUNCTION | HAS_SCOPECHAIN | flagsArg;
     argv_ = argv;
     exec.fun = &callee;
     u.nactual = nactual;
@@ -85,8 +85,6 @@ StackFrame::initCallFrame(JSContext *cx, StackFrame *prev, jsbytecode *prevpc, V
     prev_ = prev;
     prevpc_ = prevpc;
     prevsp_ = prevsp;
-    blockChain_= nullptr;
-    JS_ASSERT(!hasBlockChain());
     JS_ASSERT(!hasHookData());
 
     initVarsToUndefined();
@@ -99,7 +97,7 @@ StackFrame::initVarsToUndefined()
 }
 
 inline Value &
-StackFrame::unaliasedVar(unsigned i, MaybeCheckAliasing checkAliasing)
+StackFrame::unaliasedVar(uint32_t i, MaybeCheckAliasing checkAliasing)
 {
     JS_ASSERT_IF(checkAliasing, !script()->varIsAliased(i));
     JS_ASSERT(i < script()->nfixed());
@@ -107,10 +105,10 @@ StackFrame::unaliasedVar(unsigned i, MaybeCheckAliasing checkAliasing)
 }
 
 inline Value &
-StackFrame::unaliasedLocal(unsigned i, MaybeCheckAliasing checkAliasing)
+StackFrame::unaliasedLocal(uint32_t i, MaybeCheckAliasing checkAliasing)
 {
 #ifdef DEBUG
-    CheckLocalUnaliased(checkAliasing, script(), maybeBlockChain(), i);
+    CheckLocalUnaliased(checkAliasing, script(), i);
 #endif
     return slots()[i];
 }
@@ -179,7 +177,7 @@ inline ScopeObject &
 StackFrame::aliasedVarScope(ScopeCoordinate sc) const
 {
     JSObject *scope = &scopeChain()->as<ScopeObject>();
-    for (unsigned i = sc.hops; i; i--)
+    for (unsigned i = sc.hops(); i; i--)
         scope = &scope->as<ScopeObject>().enclosingScope();
     return scope->as<ScopeObject>();
 }
@@ -255,7 +253,7 @@ InterpreterStack::getCallFrame(JSContext *cx, const CallArgs &args, HandleScript
     JSFunction *fun = &args.callee().as<JSFunction>();
 
     JS_ASSERT(fun->nonLazyScript() == script);
-    unsigned nformal = fun->nargs;
+    unsigned nformal = fun->nargs();
     unsigned nvals = script->nslots();
 
     if (args.length() >= nformal) {
@@ -289,6 +287,8 @@ InterpreterStack::pushInlineFrame(JSContext *cx, FrameRegs &regs, const CallArgs
     RootedFunction callee(cx, &args.callee().as<JSFunction>());
     JS_ASSERT(regs.sp == args.end());
     JS_ASSERT(callee->nonLazyScript() == script);
+
+    script->ensureNonLazyCanonicalFunction(cx);
 
     StackFrame *prev = regs.fp();
     jsbytecode *prevpc = regs.pc;
@@ -363,13 +363,13 @@ AbstractFramePtr::setHookData(void *data) const
 #endif
 }
 
-inline Value
+inline HandleValue
 AbstractFramePtr::returnValue() const
 {
     if (isStackFrame())
         return asStackFrame()->returnValue();
 #ifdef JS_ION
-    return *asBaselineFrame()->returnValue();
+    return asBaselineFrame()->returnValue();
 #else
     MOZ_ASSUME_UNREACHABLE("Invalid frame");
 #endif
@@ -469,7 +469,7 @@ AbstractFramePtr::numFormalArgs() const
 }
 
 inline Value &
-AbstractFramePtr::unaliasedVar(unsigned i, MaybeCheckAliasing checkAliasing)
+AbstractFramePtr::unaliasedVar(uint32_t i, MaybeCheckAliasing checkAliasing)
 {
     if (isStackFrame())
         return asStackFrame()->unaliasedVar(i, checkAliasing);
@@ -481,7 +481,7 @@ AbstractFramePtr::unaliasedVar(unsigned i, MaybeCheckAliasing checkAliasing)
 }
 
 inline Value &
-AbstractFramePtr::unaliasedLocal(unsigned i, MaybeCheckAliasing checkAliasing)
+AbstractFramePtr::unaliasedLocal(uint32_t i, MaybeCheckAliasing checkAliasing)
 {
     if (isStackFrame())
         return asStackFrame()->unaliasedLocal(i, checkAliasing);
@@ -516,25 +516,6 @@ AbstractFramePtr::unaliasedActual(unsigned i, MaybeCheckAliasing checkAliasing)
 #endif
 }
 
-inline JSGenerator *
-AbstractFramePtr::maybeSuspendedGenerator(JSRuntime *rt) const
-{
-    if (isStackFrame())
-        return asStackFrame()->maybeSuspendedGenerator(rt);
-    return nullptr;
-}
-
-inline StaticBlockObject *
-AbstractFramePtr::maybeBlockChain() const
-{
-    if (isStackFrame())
-        return asStackFrame()->maybeBlockChain();
-#ifdef JS_ION
-    return asBaselineFrame()->maybeBlockChain();
-#else
-    MOZ_ASSUME_UNREACHABLE("Invalid frame");
-#endif
-}
 inline bool
 AbstractFramePtr::hasCallObj() const
 {

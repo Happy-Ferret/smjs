@@ -37,7 +37,7 @@ StackFrame::initExecuteFrame(JSContext *cx, JSScript *script, AbstractFramePtr e
      * script in the context of another frame and the frame type is determined
      * by the context.
      */
-    flags_ = type | HAS_SCOPECHAIN | HAS_BLOCKCHAIN;
+    flags_ = type | HAS_SCOPECHAIN;
 
     JSObject *callee = nullptr;
     if (!(flags_ & (GLOBAL))) {
@@ -81,7 +81,6 @@ StackFrame::initExecuteFrame(JSContext *cx, JSScript *script, AbstractFramePtr e
     prev_ = nullptr;
     prevpc_ = nullptr;
     prevsp_ = nullptr;
-    blockChain_ = nullptr;
 
     JS_ASSERT_IF(evalInFramePrev, isDebuggerFrame());
     evalInFramePrev_ = evalInFramePrev;
@@ -123,9 +122,6 @@ StackFrame::copyFrameAndValues(JSContext *cx, Value *vp, StackFrame *otherfp,
         if (doPostBarrier)
             HeapValue::writeBarrierPost(*dst, dst);
     }
-
-    if (JS_UNLIKELY(cx->compartment()->debugMode()))
-        DebugScopes::onGeneratorFrameChange(otherfp, this, cx);
 }
 
 /* Note: explicit instantiation for js_NewGenerator located in jsiter.cpp. */
@@ -155,27 +151,6 @@ StackFrame::writeBarrierPost()
         HeapValue::writeBarrierPost(rval_, &rval_);
 }
 
-JSGenerator *
-StackFrame::maybeSuspendedGenerator(JSRuntime *rt)
-{
-    /*
-     * A suspended generator's frame is embedded inside the JSGenerator object
-     * and is not currently running.
-     */
-    if (!isGeneratorFrame() || !isSuspended())
-        return nullptr;
-
-    /*
-     * Once we know we have a suspended generator frame, there is a static
-     * offset from the frame's snapshot to beginning of the JSGenerator.
-     */
-    char *vp = reinterpret_cast<char *>(generatorArgsSnapshotBegin());
-    char *p = vp - offsetof(JSGenerator, stackSnapshot);
-    JSGenerator *gen = reinterpret_cast<JSGenerator *>(p);
-    JS_ASSERT(gen->fp == this);
-    return gen;
-}
-
 bool
 StackFrame::copyRawFrameSlots(AutoValueVector *vec)
 {
@@ -190,7 +165,7 @@ JSObject *
 StackFrame::createRestParameter(JSContext *cx)
 {
     JS_ASSERT(fun()->hasRest());
-    unsigned nformal = fun()->nargs - 1, nactual = numActualArgs();
+    unsigned nformal = fun()->nargs() - 1, nactual = numActualArgs();
     unsigned nrest = (nactual > nformal) ? nactual - nformal : 0;
     Value *restvp = argv() + nformal;
     JSObject *obj = NewDenseCopiedArray(cx, nrest, restvp, nullptr);
@@ -289,7 +264,7 @@ StackFrame::prologue(JSContext *cx)
         functionThis() = ObjectValue(*obj);
     }
 
-    probes::EnterScript(cx, script, script->function(), this);
+    probes::EnterScript(cx, script, script->functionNonDelazifying(), this);
     return true;
 }
 
@@ -297,10 +272,9 @@ void
 StackFrame::epilogue(JSContext *cx)
 {
     JS_ASSERT(!isYielding());
-    JS_ASSERT(!hasBlockChain());
 
     RootedScript script(cx, this->script());
-    probes::ExitScript(cx, script, script->function(), hasPushedSPSFrame());
+    probes::ExitScript(cx, script, script->functionNonDelazifying(), hasPushedSPSFrame());
 
     if (isEvalFrame()) {
         if (isStrictEvalFrame()) {
@@ -351,39 +325,23 @@ StackFrame::epilogue(JSContext *cx)
 bool
 StackFrame::pushBlock(JSContext *cx, StaticBlockObject &block)
 {
-    JS_ASSERT_IF(hasBlockChain(), blockChain_ == block.enclosingBlock());
+    JS_ASSERT (block.needsClone());
 
-    if (block.needsClone()) {
-        Rooted<StaticBlockObject *> blockHandle(cx, &block);
-        ClonedBlockObject *clone = ClonedBlockObject::create(cx, blockHandle, this);
-        if (!clone)
-            return false;
+    Rooted<StaticBlockObject *> blockHandle(cx, &block);
+    ClonedBlockObject *clone = ClonedBlockObject::create(cx, blockHandle, this);
+    if (!clone)
+        return false;
 
-        pushOnScopeChain(*clone);
+    pushOnScopeChain(*clone);
 
-        blockChain_ = blockHandle;
-    } else {
-        blockChain_ = &block;
-    }
-
-    flags_ |= HAS_BLOCKCHAIN;
     return true;
 }
 
 void
 StackFrame::popBlock(JSContext *cx)
 {
-    JS_ASSERT(hasBlockChain());
-
-    if (JS_UNLIKELY(cx->compartment()->debugMode()))
-        DebugScopes::onPopBlock(cx, this);
-
-    if (blockChain_->needsClone()) {
-        JS_ASSERT(scopeChain_->as<ClonedBlockObject>().staticBlock() == *blockChain_);
-        popOffScopeChain();
-    }
-
-    blockChain_ = blockChain_->enclosingBlock();
+    JS_ASSERT(scopeChain_->is<ClonedBlockObject>());
+    popOffScopeChain();
 }
 
 void
@@ -417,7 +375,7 @@ StackFrame::mark(JSTracer *trc)
     }
     if (IS_GC_MARKING_TRACER(trc))
         script()->compartment()->zone()->active = true;
-    gc::MarkValueUnbarriered(trc, &returnValue(), "rval");
+    gc::MarkValueUnbarriered(trc, returnValue().address(), "rval");
 }
 
 void
@@ -563,6 +521,18 @@ ScriptFrameIter::settleOnActivation()
             continue;
         }
 
+        // If the caller supplied principals, only show activations which are subsumed (of the same
+        // origin or of an origin accessible) by these principals.
+        if (data_.principals_) {
+            if (JSSubsumesOp subsumes = data_.cx_->runtime()->securityCallbacks->subsumes) {
+                JS::AutoAssertNoGC nogc;
+                if (!subsumes(data_.principals_, activation->compartment()->principals)) {
+                    ++data_.activations_;
+                    continue;
+                }
+            }
+        }
+
 #ifdef JS_ION
         if (activation->isJit()) {
             data_.ionFrames_ = jit::IonFrameIterator(data_.activations_);
@@ -607,11 +577,12 @@ ScriptFrameIter::settleOnActivation()
 }
 
 ScriptFrameIter::Data::Data(JSContext *cx, PerThreadData *perThread, SavedOption savedOption,
-                            ContextOption contextOption)
+                            ContextOption contextOption, JSPrincipals *principals)
   : perThread_(perThread),
     cx_(cx),
     savedOption_(savedOption),
     contextOption_(contextOption),
+    principals_(principals),
     pc_(nullptr),
     interpFrames_(nullptr),
     activations_(cx->runtime())
@@ -626,6 +597,7 @@ ScriptFrameIter::Data::Data(const ScriptFrameIter::Data &other)
     cx_(other.cx_),
     savedOption_(other.savedOption_),
     contextOption_(other.contextOption_),
+    principals_(other.principals_),
     state_(other.state_),
     pc_(other.pc_),
     interpFrames_(other.interpFrames_),
@@ -637,7 +609,7 @@ ScriptFrameIter::Data::Data(const ScriptFrameIter::Data &other)
 }
 
 ScriptFrameIter::ScriptFrameIter(JSContext *cx, SavedOption savedOption)
-  : data_(cx, &cx->runtime()->mainThread, savedOption, CURRENT_CONTEXT)
+  : data_(cx, &cx->runtime()->mainThread, savedOption, CURRENT_CONTEXT, nullptr)
 #ifdef JS_ION
     , ionInlineFrames_(cx, (js::jit::IonFrameIterator*) nullptr)
 #endif
@@ -645,8 +617,9 @@ ScriptFrameIter::ScriptFrameIter(JSContext *cx, SavedOption savedOption)
     settleOnActivation();
 }
 
-ScriptFrameIter::ScriptFrameIter(JSContext *cx, ContextOption contextOption, SavedOption savedOption)
-  : data_(cx, &cx->runtime()->mainThread, savedOption, contextOption)
+ScriptFrameIter::ScriptFrameIter(JSContext *cx, ContextOption contextOption,
+                                 SavedOption savedOption, JSPrincipals *principals)
+  : data_(cx, &cx->runtime()->mainThread, savedOption, contextOption, principals)
 #ifdef JS_ION
     , ionInlineFrames_(cx, (js::jit::IonFrameIterator*) nullptr)
 #endif
@@ -827,7 +800,7 @@ ScriptFrameIter::isGlobalFrame() const
         if (data_.ionFrames_.isBaselineJS())
             return data_.ionFrames_.baselineFrame()->isGlobalFrame();
         JS_ASSERT(!script()->isForEval());
-        return !script()->function();
+        return !script()->functionNonDelazifying();
 #else
         break;
 #endif
@@ -1167,7 +1140,7 @@ ScriptFrameIter::returnValue() const
       case JIT:
 #ifdef JS_ION
         if (data_.ionFrames_.isBaselineJS())
-            return *data_.ionFrames_.baselineFrame()->returnValue();
+            return data_.ionFrames_.baselineFrame()->returnValue();
 #endif
         break;
       case SCRIPTED:
@@ -1284,8 +1257,7 @@ AbstractFramePtr::hasPushedSPSFrame() const
 
 #ifdef DEBUG
 void
-js::CheckLocalUnaliased(MaybeCheckAliasing checkAliasing, JSScript *script,
-                        StaticBlockObject *maybeBlock, unsigned i)
+js::CheckLocalUnaliased(MaybeCheckAliasing checkAliasing, JSScript *script, uint32_t i)
 {
     if (!checkAliasing)
         return;
@@ -1294,13 +1266,8 @@ js::CheckLocalUnaliased(MaybeCheckAliasing checkAliasing, JSScript *script,
     if (i < script->nfixed()) {
         JS_ASSERT(!script->varIsAliased(i));
     } else {
-        unsigned depth = i - script->nfixed();
-        for (StaticBlockObject *b = maybeBlock; b; b = b->enclosingBlock()) {
-            if (b->containsVarAtDepth(depth)) {
-                JS_ASSERT(!b->isAliased(depth - b->stackDepth()));
-                break;
-            }
-        }
+        // FIXME: The callers of this function do not easily have the PC of the
+        // current frame, and so they do not know the block scope.
     }
 }
 #endif

@@ -68,18 +68,19 @@ IsTopFrameConstructing(JSContext *cx, AbstractFramePtr frame)
 }
 
 JSTrapStatus
-js::ScriptDebugPrologue(JSContext *cx, AbstractFramePtr frame)
+js::ScriptDebugPrologue(JSContext *cx, AbstractFramePtr frame, jsbytecode *pc)
 {
     JS_ASSERT_IF(frame.isStackFrame(), frame.asStackFrame() == cx->interpreterFrame());
 
     if (!frame.script()->selfHosted()) {
+        JSAbstractFramePtr jsframe(frame.raw(), pc);
         if (frame.isFramePushedByExecute()) {
             if (JSInterpreterHook hook = cx->runtime()->debugHooks.executeHook)
-                frame.setHookData(hook(cx, Jsvalify(frame), IsTopFrameConstructing(cx, frame),
+                frame.setHookData(hook(cx, jsframe, IsTopFrameConstructing(cx, frame),
                                        true, 0, cx->runtime()->debugHooks.executeHookData));
         } else {
             if (JSInterpreterHook hook = cx->runtime()->debugHooks.callHook)
-                frame.setHookData(hook(cx, Jsvalify(frame), IsTopFrameConstructing(cx, frame),
+                frame.setHookData(hook(cx, jsframe, IsTopFrameConstructing(cx, frame),
                                        true, 0, cx->runtime()->debugHooks.callHookData));
         }
     }
@@ -105,7 +106,7 @@ js::ScriptDebugPrologue(JSContext *cx, AbstractFramePtr frame)
 }
 
 bool
-js::ScriptDebugEpilogue(JSContext *cx, AbstractFramePtr frame, bool okArg)
+js::ScriptDebugEpilogue(JSContext *cx, AbstractFramePtr frame, jsbytecode *pc, bool okArg)
 {
     JS_ASSERT_IF(frame.isStackFrame(), frame.asStackFrame() == cx->interpreterFrame());
 
@@ -113,12 +114,13 @@ js::ScriptDebugEpilogue(JSContext *cx, AbstractFramePtr frame, bool okArg)
 
     // We don't add hook data for self-hosted scripts, so we don't need to check for them, here.
     if (void *hookData = frame.maybeHookData()) {
+        JSAbstractFramePtr jsframe(frame.raw(), pc);
         if (frame.isFramePushedByExecute()) {
             if (JSInterpreterHook hook = cx->runtime()->debugHooks.executeHook)
-                hook(cx, Jsvalify(frame), IsTopFrameConstructing(cx, frame), false, &ok, hookData);
+                hook(cx, jsframe, IsTopFrameConstructing(cx, frame), false, &ok, hookData);
         } else {
             if (JSInterpreterHook hook = cx->runtime()->debugHooks.callHook)
-                hook(cx, Jsvalify(frame), IsTopFrameConstructing(cx, frame), false, &ok, hookData);
+                hook(cx, jsframe, IsTopFrameConstructing(cx, frame), false, &ok, hookData);
         }
     }
 
@@ -339,7 +341,7 @@ JS_SetWatchPoint(JSContext *cx, JSObject *obj_, jsid id_,
     if (!JSObject::sparsifyDenseElements(cx, obj))
         return false;
 
-    types::MarkTypePropertyConfigured(cx, obj, propid);
+    types::MarkTypePropertyNonData(cx, obj, propid);
 
     WatchpointMap *wpmap = cx->compartment()->watchpointMap;
     if (!wpmap) {
@@ -448,7 +450,7 @@ JS_GetLinePCs(JSContext *cx, JSScript *script,
 JS_PUBLIC_API(unsigned)
 JS_GetFunctionArgumentCount(JSContext *cx, JSFunction *fun)
 {
-    return fun->nargs;
+    return fun->nargs();
 }
 
 JS_PUBLIC_API(bool)
@@ -542,7 +544,8 @@ JS_GetScriptOriginPrincipals(JSScript *script)
 JS_PUBLIC_API(JSFunction *)
 JS_GetScriptFunction(JSContext *cx, JSScript *script)
 {
-    return script->function();
+    script->ensureNonLazyCanonicalFunction(cx);
+    return script->functionNonDelazifying();
 }
 
 JS_PUBLIC_API(JSObject *)
@@ -630,8 +633,10 @@ GetPropertyDesc(JSContext *cx, JSObject *obj_, HandleShape shape, JSPropertyDesc
 
     bool wasThrowing = cx->isExceptionPending();
     RootedValue lastException(cx, UndefinedValue());
-    if (wasThrowing)
-        lastException = cx->getPendingException();
+    if (wasThrowing) {
+        if (!cx->getPendingException(&lastException))
+            return false;
+    }
     cx->clearPendingException();
 
     Rooted<jsid> id(cx, shape->propid());
@@ -642,7 +647,9 @@ GetPropertyDesc(JSContext *cx, JSObject *obj_, HandleShape shape, JSPropertyDesc
             pd->value = JSVAL_VOID;
         } else {
             pd->flags = JSPD_EXCEPTION;
-            pd->value = cx->getPendingException();
+            if (!cx->getPendingException(&value))
+                return false;
+            pd->value = value;
         }
     } else {
         pd->flags = 0;
@@ -827,23 +834,6 @@ JS_GetGlobalDebugHooks(JSRuntime *rt)
 
 /************************************************************************/
 
-JS_PUBLIC_API(void)
-JS_DumpBytecode(JSContext *cx, JSScript *scriptArg)
-{
-#if defined(DEBUG)
-    Rooted<JSScript*> script(cx, scriptArg);
-
-    Sprinter sprinter(cx);
-    if (!sprinter.init())
-        return;
-
-    fprintf(stdout, "--- SCRIPT %s:%d ---\n", script->filename(), (int) script->lineno());
-    js_Disassemble(cx, script, true, &sprinter);
-    fputs(sprinter.string(), stdout);
-    fprintf(stdout, "--- END SCRIPT %s:%d ---\n", script->filename(), (int) script->lineno());
-#endif
-}
-
 extern JS_PUBLIC_API(void)
 JS_DumpPCCounts(JSContext *cx, JSScript *scriptArg)
 {
@@ -860,30 +850,6 @@ JS_DumpPCCounts(JSContext *cx, JSScript *scriptArg)
     fprintf(stdout, "--- END SCRIPT %s:%d ---\n", script->filename(), (int) script->lineno());
 }
 
-namespace {
-
-typedef Vector<JSScript *, 0, SystemAllocPolicy> ScriptsToDump;
-
-static void
-DumpBytecodeScriptCallback(JSRuntime *rt, void *data, JSScript *script)
-{
-    static_cast<ScriptsToDump *>(data)->append(script);
-}
-
-} /* anonymous namespace */
-
-JS_PUBLIC_API(void)
-JS_DumpCompartmentBytecode(JSContext *cx)
-{
-    ScriptsToDump scripts;
-    IterateScripts(cx->runtime(), cx->compartment(), &scripts, DumpBytecodeScriptCallback);
-
-    for (size_t i = 0; i < scripts.length(); i++) {
-        if (scripts[i]->enclosingScriptsCompiledSuccessfully())
-            JS_DumpBytecode(cx, scripts[i]);
-    }
-}
-
 JS_PUBLIC_API(void)
 JS_DumpCompartmentPCCounts(JSContext *cx)
 {
@@ -892,7 +858,7 @@ JS_DumpCompartmentPCCounts(JSContext *cx)
         if (script->compartment() != cx->compartment())
             continue;
 
-        if (script->hasScriptCounts() && script->enclosingScriptsCompiledSuccessfully())
+        if (script->hasScriptCounts())
             JS_DumpPCCounts(cx, script);
     }
 
@@ -969,10 +935,7 @@ JS::DescribeStack(JSContext *cx, unsigned maxFrames)
     Vector<FrameDescription> frames(cx);
 
     for (NonBuiltinScriptFrameIter i(cx); !i.done(); ++i) {
-        FrameDescription desc;
-        desc.script = i.script();
-        desc.lineno = PCToLineNumber(i.script(), i.pc());
-        desc.fun = i.maybeCallee();
+        FrameDescription desc(i.script(), i.maybeCallee(), i.pc());
         if (!frames.append(desc))
             return nullptr;
         if (frames.length() == maxFrames)
@@ -991,7 +954,9 @@ JS::DescribeStack(JSContext *cx, unsigned maxFrames)
 JS_PUBLIC_API(void)
 JS::FreeStackDescription(JSContext *cx, JS::StackDescription *desc)
 {
-    js_delete(desc->frames);
+    for (size_t i = 0; i < desc->nframes; ++i)
+        desc->frames[i].~FrameDescription();
+    js_free(desc->frames);
     js_delete(desc);
 }
 
@@ -1228,27 +1193,27 @@ JS::FormatStackDump(JSContext *cx, char *buf, bool showArgs, bool showLocals, bo
     return buf;
 }
 
-JSAbstractFramePtr::JSAbstractFramePtr(void *raw)
-  : ptr_(uintptr_t(raw))
+JSAbstractFramePtr::JSAbstractFramePtr(void *raw, jsbytecode *pc)
+  : ptr_(uintptr_t(raw)), pc_(pc)
 { }
 
 JSObject *
 JSAbstractFramePtr::scopeChain(JSContext *cx)
 {
-    AbstractFramePtr frame = Valueify(*this);
+    AbstractFramePtr frame(*this);
     RootedObject scopeChain(cx, frame.scopeChain());
     AutoCompartment ac(cx, scopeChain);
-    return GetDebugScopeForFrame(cx, frame);
+    return GetDebugScopeForFrame(cx, frame, pc());
 }
 
 JSObject *
 JSAbstractFramePtr::callObject(JSContext *cx)
 {
-    AbstractFramePtr frame = Valueify(*this);
+    AbstractFramePtr frame(*this);
     if (!frame.isFunctionFrame())
         return nullptr;
 
-    JSObject *o = GetDebugScopeForFrame(cx, frame);
+    JSObject *o = GetDebugScopeForFrame(cx, frame, pc());
 
     /*
      * Given that fp is a function frame and GetDebugScopeForFrame always fills
@@ -1270,21 +1235,21 @@ JSAbstractFramePtr::callObject(JSContext *cx)
 JSFunction *
 JSAbstractFramePtr::maybeFun()
 {
-    AbstractFramePtr frame = Valueify(*this);
+    AbstractFramePtr frame(*this);
     return frame.maybeFun();
 }
 
 JSScript *
 JSAbstractFramePtr::script()
 {
-    AbstractFramePtr frame = Valueify(*this);
+    AbstractFramePtr frame(*this);
     return frame.script();
 }
 
 bool
 JSAbstractFramePtr::getThisValue(JSContext *cx, MutableHandleValue thisv)
 {
-    AbstractFramePtr frame = Valueify(*this);
+    AbstractFramePtr frame(*this);
 
     RootedObject scopeChain(cx, frame.scopeChain());
     js::AutoCompartment ac(cx, scopeChain);
@@ -1298,7 +1263,7 @@ JSAbstractFramePtr::getThisValue(JSContext *cx, MutableHandleValue thisv)
 bool
 JSAbstractFramePtr::isDebuggerFrame()
 {
-    AbstractFramePtr frame = Valueify(*this);
+    AbstractFramePtr frame(*this);
     return frame.isDebuggerFrame();
 }
 
@@ -1340,7 +1305,7 @@ JSAbstractFramePtr::evaluateUCInStackFrame(JSContext *cx,
     if (!env)
         return false;
 
-    AbstractFramePtr frame = Valueify(*this);
+    AbstractFramePtr frame(*this);
     if (!ComputeThis(cx, frame))
         return false;
     RootedValue thisv(cx, frame.thisValue());
@@ -1352,7 +1317,11 @@ JSAbstractFramePtr::evaluateUCInStackFrame(JSContext *cx,
 
 JSBrokenFrameIterator::JSBrokenFrameIterator(JSContext *cx)
 {
-    NonBuiltinScriptFrameIter iter(cx);
+    // Show all frames on the stack whose principal is subsumed by the current principal.
+    NonBuiltinScriptFrameIter iter(cx,
+                                   ScriptFrameIter::ALL_CONTEXTS,
+                                   ScriptFrameIter::GO_THROUGH_SAVED,
+                                   cx->compartment()->principals);
     data_ = iter.copyData();
 }
 
@@ -1382,7 +1351,7 @@ JSAbstractFramePtr
 JSBrokenFrameIterator::abstractFramePtr() const
 {
     NonBuiltinScriptFrameIter iter(*(ScriptFrameIter::Data *)data_);
-    return Jsvalify(iter.abstractFramePtr());
+    return JSAbstractFramePtr(iter.abstractFramePtr().raw(), iter.pc());
 }
 
 jsbytecode *

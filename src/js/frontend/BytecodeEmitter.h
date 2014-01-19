@@ -46,13 +46,14 @@ struct CGObjectList {
     unsigned add(ObjectBox *objbox);
     unsigned indexOf(JSObject *obj);
     void finish(ObjectArray *array);
+    ObjectBox* find(uint32_t index);
 };
 
 struct CGTryNoteList {
     Vector<JSTryNote> list;
     CGTryNoteList(ExclusiveContext *cx) : list(cx) {}
 
-    bool append(JSTryNoteKind kind, unsigned stackDepth, size_t start, size_t end);
+    bool append(JSTryNoteKind kind, uint32_t stackDepth, size_t start, size_t end);
     size_t length() const { return list.length(); }
     void finish(TryNoteArray *array);
 };
@@ -62,6 +63,7 @@ struct CGBlockScopeList {
     CGBlockScopeList(ExclusiveContext *cx) : list(cx) {}
 
     bool append(uint32_t scopeObject, uint32_t offset, uint32_t parent);
+    uint32_t findEnclosingScope(uint32_t index);
     void recordEnd(uint32_t index, uint32_t offset);
     size_t length() const { return list.length(); }
     void finish(BlockScopeArray *array);
@@ -111,10 +113,10 @@ struct BytecodeEmitter
     OwnedAtomIndexMapPtr atomIndices; /* literals indexed for mapping */
     unsigned        firstLine;      /* first line, for JSScript::initFromEmitter */
 
-    int             stackDepth;     /* current stack depth in script frame */
-    unsigned        maxStackDepth;  /* maximum stack depth so far */
+    int32_t         stackDepth;     /* current stack depth in script frame */
+    uint32_t        maxStackDepth;  /* maximum stack depth so far */
 
-    unsigned        arrayCompDepth; /* stack depth of array in comprehension */
+    uint32_t        arrayCompDepth; /* stack depth of array in comprehension */
 
     unsigned        emitLevel;      /* js::frontend::EmitTree recursion level */
 

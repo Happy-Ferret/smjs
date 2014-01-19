@@ -443,12 +443,6 @@ js::RunningWithTrustedPrincipals(JSContext *cx)
     return cx->runningWithTrustedPrincipals();
 }
 
-JS_FRIEND_API(bool)
-js::IsOriginalScriptFunction(JSFunction *fun)
-{
-    return fun->nonLazyScript()->function() == fun;
-}
-
 JS_FRIEND_API(JSScript *)
 js::GetOutermostEnclosingFunctionOfScriptedCaller(JSContext *cx)
 {
@@ -645,6 +639,17 @@ extern JS_FRIEND_API(bool)
 js::AreGCGrayBitsValid(JSRuntime *rt)
 {
     return rt->gcGrayBitsValid;
+}
+
+JS_FRIEND_API(bool)
+js::ZoneGlobalsAreAllGray(JS::Zone *zone)
+{
+    for (CompartmentsInZoneIter comp(zone); !comp.done(); comp.next()) {
+        JSObject *obj = comp->maybeGlobal();
+        if (!obj || !JS::GCThingIsMarkedGray(obj))
+            return false;
+    }
+    return true;
 }
 
 JS_FRIEND_API(JSGCTraceKind)
@@ -933,22 +938,33 @@ JS::DisableIncrementalGC(JSRuntime *rt)
 extern JS_FRIEND_API(void)
 JS::DisableGenerationalGC(JSRuntime *rt)
 {
-    rt->gcGenerationalEnabled = false;
 #ifdef JSGC_GENERATIONAL
-    MinorGC(rt, JS::gcreason::API);
-    rt->gcNursery.disable();
-    rt->gcStoreBuffer.disable();
+    if (IsGenerationalGCEnabled(rt)) {
+        MinorGC(rt, JS::gcreason::API);
+        rt->gcNursery.disable();
+        rt->gcStoreBuffer.disable();
+    }
 #endif
+    ++rt->gcGenerationalDisabled;
 }
 
 extern JS_FRIEND_API(void)
 JS::EnableGenerationalGC(JSRuntime *rt)
 {
-    rt->gcGenerationalEnabled = true;
+    JS_ASSERT(rt->gcGenerationalDisabled > 0);
+    --rt->gcGenerationalDisabled;
 #ifdef JSGC_GENERATIONAL
-    rt->gcNursery.enable();
-    rt->gcStoreBuffer.enable();
+    if (IsGenerationalGCEnabled(rt)) {
+        rt->gcNursery.enable();
+        rt->gcStoreBuffer.enable();
+    }
 #endif
+}
+
+extern JS_FRIEND_API(bool)
+JS::IsGenerationalGCEnabled(JSRuntime *rt)
+{
+    return rt->gcGenerationalDisabled == 0;
 }
 
 JS_FRIEND_API(bool)
@@ -1044,7 +1060,7 @@ JS::ObjectPtr::trace(JSTracer *trc, const char *name)
 JS_FRIEND_API(JSObject *)
 js::GetTestingFunctions(JSContext *cx)
 {
-    RootedObject obj(cx, JS_NewObject(cx, nullptr, nullptr, nullptr));
+    RootedObject obj(cx, JS_NewObject(cx, nullptr, NullPtr(), NullPtr()));
     if (!obj)
         return nullptr;
 
@@ -1191,7 +1207,7 @@ js_DefineOwnProperty(JSContext *cx, JSObject *objArg, jsid idArg,
 }
 
 JS_FRIEND_API(bool)
-js_ReportIsNotFunction(JSContext *cx, const JS::Value& v)
+js_ReportIsNotFunction(JSContext *cx, JS::HandleValue v)
 {
     return ReportIsNotFunction(cx, v);
 }

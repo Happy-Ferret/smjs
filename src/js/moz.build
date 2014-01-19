@@ -4,8 +4,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DIRS += ['config']
-
 if CONFIG['DEHYDRA_PATH']:
     DIRS += ['analysis-tests']
 
@@ -96,8 +94,8 @@ UNIFIED_SOURCES += [
     'builtin/Intl.cpp',
     'builtin/MapObject.cpp',
     'builtin/Object.cpp',
-    'builtin/ParallelArray.cpp',
     'builtin/Profilers.cpp',
+    'builtin/SIMD.cpp',
     'builtin/TestingFunctions.cpp',
     'builtin/TypedObject.cpp',
     'builtin/TypeRepresentation.cpp',
@@ -157,6 +155,7 @@ UNIFIED_SOURCES += [
     'vm/ArgumentsObject.cpp',
     'vm/CallNonGenericMethod.cpp',
     'vm/CharacterEncoding.cpp',
+    'vm/Compression.cpp',
     'vm/DateTime.cpp',
     'vm/Debugger.cpp',
     'vm/ErrorObject.cpp',
@@ -257,7 +256,9 @@ if CONFIG['ENABLE_ION']:
         'jit/IonCaches.cpp',
         'jit/IonFrames.cpp',
         'jit/IonMacroAssembler.cpp',
+        'jit/IonOptimizationLevels.cpp',
         'jit/IonSpewer.cpp',
+        'jit/JitOptions.cpp',
         'jit/JSONSpewer.cpp',
         'jit/LICM.cpp',
         'jit/LinearScan.cpp',
@@ -291,7 +292,6 @@ if CONFIG['ENABLE_ION']:
             'jit/shared/BaselineCompiler-x86-shared.cpp',
             'jit/shared/BaselineIC-x86-shared.cpp',
             'jit/shared/CodeGenerator-x86-shared.cpp',
-            'jit/shared/IonFrames-x86-shared.cpp',
             'jit/shared/Lowering-x86-shared.cpp',
             'jit/shared/MoveEmitter-x86-shared.cpp',
         ]
@@ -325,7 +325,6 @@ if CONFIG['ENABLE_ION']:
             'jit/arm/BaselineCompiler-arm.cpp',
             'jit/arm/BaselineIC-arm.cpp',
             'jit/arm/CodeGenerator-arm.cpp',
-            'jit/arm/IonFrames-arm.cpp',
             'jit/arm/Lowering-arm.cpp',
             'jit/arm/MacroAssembler-arm.cpp',
             'jit/arm/MoveEmitter-arm.cpp',
@@ -349,11 +348,15 @@ else:
     ]
 
 if CONFIG['ENABLE_ION'] or CONFIG['ENABLE_YARR_JIT']:
-    SOURCES += [
-        'assembler/assembler/ARMAssembler.cpp',
-        'assembler/assembler/MacroAssemblerARM.cpp',
-        'assembler/assembler/MacroAssemblerX86Common.cpp',
-    ]
+    if '86' in CONFIG['TARGET_CPU']:
+        SOURCES += [
+            'assembler/assembler/MacroAssemblerX86Common.cpp',
+        ]
+    elif CONFIG['CPU_ARCH'] == 'arm':
+        SOURCES += [
+            'assembler/assembler/ARMAssembler.cpp',
+            'assembler/assembler/MacroAssemblerARM.cpp',
+        ]
 
 if CONFIG['ENABLE_YARR_JIT']:
     SOURCES += [
@@ -429,5 +432,5 @@ if CONFIG['MOZ_LINKER']:
 if CONFIG['_MSC_VER']:
     if CONFIG['CPU_ARCH'] == 'x86':
         SOURCES['builtin/RegExp.cpp'].no_pgo = True # Bug 772303
-    elif CONFIG['CPU_ARCH'] == 'x86_64':
+    elif CONFIG['CPU_ARCH'] == 'x86_64' and CONFIG['JS_HAS_CTYPES']:
         SOURCES['ctypes/CTypes.cpp'].no_pgo = True # Bug 810661
