@@ -108,12 +108,6 @@ static size_t gMaxStackSize = 2 * 128 * sizeof(size_t) * 1024;
 static size_t gMaxStackSize = 128 * sizeof(size_t) * 1024;
 #endif
 
-#ifdef JS_THREADSAFE
-static unsigned gStackBaseThreadIndex;
-#else
-static uintptr_t gStackBase;
-#endif
-
 /*
  * Limit the timeout to 30 minutes to prevent an overflow on platfoms
  * that represent the time internally in microseconds using 32-bit int.
@@ -862,7 +856,7 @@ Evaluate(JSContext *cx, unsigned argc, jsval *vp)
     RootedObject element(cx);
     RootedString elementProperty(cx);
     JSAutoByteString fileNameBytes;
-    RootedString sourceURL(cx);
+    RootedString displayURL(cx);
     RootedString sourceMapURL(cx);
     unsigned lineNumber = 1;
     RootedObject global(cx, nullptr);
@@ -920,11 +914,11 @@ Evaluate(JSContext *cx, unsigned argc, jsval *vp)
                 return false;
         }
 
-        if (!JS_GetProperty(cx, opts, "sourceURL", &v))
+        if (!JS_GetProperty(cx, opts, "displayURL", &v))
             return false;
         if (!v.isUndefined()) {
-            sourceURL = ToString(cx, v);
-            if (!sourceURL)
+            displayURL = ToString(cx, v);
+            if (!displayURL)
                 return false;
         }
 
@@ -1031,11 +1025,11 @@ Evaluate(JSContext *cx, unsigned argc, jsval *vp)
                 return false;
         }
 
-        if (sourceURL && !script->scriptSource()->hasSourceURL()) {
-            const jschar *surl = JS_GetStringCharsZ(cx, sourceURL);
-            if (!surl)
+        if (displayURL && !script->scriptSource()->hasDisplayURL()) {
+            const jschar *durl = JS_GetStringCharsZ(cx, displayURL);
+            if (!durl)
                 return false;
-            if (!script->scriptSource()->setSourceURL(cx, surl))
+            if (!script->scriptSource()->setDisplayURL(cx, durl))
                 return false;
         }
         if (sourceMapURL && !script->scriptSource()->hasSourceMapURL()) {
@@ -2348,7 +2342,7 @@ GetPDA(JSContext *cx, unsigned argc, jsval *vp)
     RootedValue alias(cx);
 
     for (uint32_t i = 0; i < pda.length; i++, pd++) {
-        pdobj = JS_NewObject(cx, nullptr, nullptr, nullptr);
+        pdobj = JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr());
         if (!pdobj) {
             ok = false;
             break;
@@ -3093,20 +3087,20 @@ Parent(JSContext *cx, unsigned argc, jsval *vp)
 static bool
 Compile(JSContext *cx, unsigned argc, jsval *vp)
 {
-    if (argc < 1) {
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() < 1) {
         JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_MORE_ARGS_NEEDED,
                              "compile", "0", "s");
         return false;
     }
-    jsval arg0 = JS_ARGV(cx, vp)[0];
-    if (!JSVAL_IS_STRING(arg0)) {
-        const char *typeName = JS_GetTypeName(cx, JS_TypeOfValue(cx, arg0));
+    if (!args[0].isString()) {
+        const char *typeName = JS_GetTypeName(cx, JS_TypeOfValue(cx, args[0]));
         JS_ReportError(cx, "expected string to compile, got %s", typeName);
         return false;
     }
 
     RootedObject global(cx, JS::CurrentGlobalOrNull(cx));
-    JSString *scriptContents = JSVAL_TO_STRING(arg0);
+    JSString *scriptContents = args[0].toString();
     JS::AutoSaveContextOptions asco(cx);
     JS::ContextOptionsRef(cx).setNoScriptRval(true);
     JS::CompileOptions options(cx);
@@ -3114,7 +3108,7 @@ Compile(JSContext *cx, unsigned argc, jsval *vp)
            .setCompileAndGo(true);
     bool ok = JS_CompileUCScript(cx, global, JS_GetStringCharsZ(cx, scriptContents),
                                  JS_GetStringLength(scriptContents), options);
-    JS_SET_RVAL(cx, vp, UndefinedValue());
+    args.rval().setUndefined();
     return ok;
 }
 
@@ -3681,14 +3675,15 @@ NestedShell(JSContext *cx, unsigned argc, jsval *vp)
 
 static bool
 DecompileFunctionSomehow(JSContext *cx, unsigned argc, Value *vp,
-                         JSString *(*decompiler)(JSContext *, JSFunction *, unsigned))
+                         JSString *(*decompiler)(JSContext *, HandleFunction, unsigned))
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     if (args.length() < 1 || !args[0].isObject() || !args[0].toObject().is<JSFunction>()) {
         args.rval().setUndefined();
         return true;
     }
-    JSString *result = decompiler(cx, &args[0].toObject().as<JSFunction>(), 0);
+    RootedFunction fun(cx, &args[0].toObject().as<JSFunction>());
+    JSString *result = decompiler(cx, fun, 0);
     if (!result)
         return false;
     args.rval().setString(result);
@@ -3890,7 +3885,7 @@ ObjectEmulatingUndefined(JSContext *cx, unsigned argc, jsval *vp)
         JS_ConvertStub
     };
 
-    RootedObject obj(cx, JS_NewObject(cx, &cls, nullptr, nullptr));
+    RootedObject obj(cx, JS_NewObject(cx, &cls, JS::NullPtr(), JS::NullPtr()));
     if (!obj)
         return false;
     JS_SET_RVAL(cx, vp, ObjectValue(*obj));
@@ -4839,15 +4834,14 @@ static const JSJitInfo dom_x_getterinfo = {
     { (JSJitGetterOp)dom_get_x },
     0,        /* protoID */
     0,        /* depth */
+    JSJitInfo::AliasNone, /* aliasSet */
     JSJitInfo::Getter,
+    JSVAL_TYPE_UNKNOWN, /* returnType */
     true,     /* isInfallible. False in setters. */
     true,     /* isMovable */
-    JSJitInfo::AliasNone, /* aliasSet */
     false,    /* isInSlot */
-    0,        /* slotIndex */
-    JSVAL_TYPE_UNKNOWN, /* returnType */
-    nullptr,  /* argTypes */
-    nullptr   /* parallelNative */
+    false,    /* isTypedMethod */
+    0         /* slotIndex */
 };
 
 static const JSJitInfo dom_x_setterinfo = {
@@ -4855,14 +4849,13 @@ static const JSJitInfo dom_x_setterinfo = {
     0,        /* protoID */
     0,        /* depth */
     JSJitInfo::Setter,
+    JSJitInfo::AliasEverything, /* aliasSet */
+    JSVAL_TYPE_UNKNOWN, /* returnType */
     false,    /* isInfallible. False in setters. */
     false,    /* isMovable. */
-    JSJitInfo::AliasEverything, /* aliasSet */
     false,    /* isInSlot */
-    0,        /* slotIndex */
-    JSVAL_TYPE_UNKNOWN, /* returnType */
-    nullptr,  /* argTypes */
-    nullptr   /* parallelNative */
+    false,    /* isTypedMethod */
+    0         /* slotIndex */
 };
 
 static const JSJitInfo doFoo_methodinfo = {
@@ -4870,14 +4863,13 @@ static const JSJitInfo doFoo_methodinfo = {
     0,        /* protoID */
     0,        /* depth */
     JSJitInfo::Method,
+    JSJitInfo::AliasEverything, /* aliasSet */
+    JSVAL_TYPE_UNKNOWN, /* returnType */
     false,    /* isInfallible. False in setters. */
     false,    /* isMovable */
-    JSJitInfo::AliasEverything, /* aliasSet */
     false,    /* isInSlot */
-    0,        /* slotIndex */
-    JSVAL_TYPE_UNKNOWN, /* returnType */
-    nullptr,  /* argTypes */
-    nullptr   /* parallelNative */
+    false,    /* isTypedMethod */
+    0         /* slotIndex */
 };
 
 static const JSPropertySpec dom_props[] = {
@@ -4934,7 +4926,7 @@ dom_genericGetter(JSContext *cx, unsigned argc, JS::Value *vp)
     JS::Value val = js::GetReservedSlot(obj, DOM_OBJECT_SLOT);
 
     const JSJitInfo *info = FUNCTION_VALUE_TO_JITINFO(JS_CALLEE(cx, vp));
-    MOZ_ASSERT(info->type == JSJitInfo::Getter);
+    MOZ_ASSERT(info->type() == JSJitInfo::Getter);
     JSJitGetterOp getter = info->getter;
     return getter(cx, obj, val.toPrivate(), JSJitGetterCallArgs(args));
 }
@@ -4957,7 +4949,7 @@ dom_genericSetter(JSContext* cx, unsigned argc, JS::Value* vp)
     JS::Value val = js::GetReservedSlot(obj, DOM_OBJECT_SLOT);
 
     const JSJitInfo *info = FUNCTION_VALUE_TO_JITINFO(JS_CALLEE(cx, vp));
-    MOZ_ASSERT(info->type == JSJitInfo::Setter);
+    MOZ_ASSERT(info->type() == JSJitInfo::Setter);
     JSJitSetterOp setter = info->setter;
     if (!setter(cx, obj, val.toPrivate(), JSJitSetterCallArgs(args)))
         return false;
@@ -4981,7 +4973,7 @@ dom_genericMethod(JSContext* cx, unsigned argc, JS::Value *vp)
     JS::Value val = js::GetReservedSlot(obj, DOM_OBJECT_SLOT);
 
     const JSJitInfo *info = FUNCTION_VALUE_TO_JITINFO(JS_CALLEE(cx, vp));
-    MOZ_ASSERT(info->type == JSJitInfo::Method);
+    MOZ_ASSERT(info->type() == JSJitInfo::Method);
     JSJitMethodOp method = info->method;
     return method(cx, obj, val.toPrivate(), JSJitMethodCallArgs(args));
 }
@@ -5008,7 +5000,8 @@ dom_constructor(JSContext* cx, unsigned argc, JS::Value *vp)
         return false;
     }
 
-    RootedObject domObj(cx, JS_NewObject(cx, &dom_class, &protov.toObject(), nullptr));
+    RootedObject proto(cx, &protov.toObject());
+    RootedObject domObj(cx, JS_NewObject(cx, &dom_class, proto, JS::NullPtr()));
     if (!domObj)
         return false;
 
@@ -5236,7 +5229,7 @@ ShellCloseAsmJSCacheEntryForWrite(HandleObject global, size_t serializedSize, ui
 }
 
 static bool
-ShellBuildId(js::Vector<char> *buildId)
+ShellBuildId(JS::BuildIdCharVector *buildId)
 {
     // The browser embeds the date into the buildid and the buildid is embedded
     // in the binary, so every 'make' necessarily builds a new firefox binary.
@@ -5721,7 +5714,6 @@ main(int argc, char **argv, char **envp)
     sArgc = argc;
     sArgv = argv;
 
-    int stackDummy;
     JSRuntime *rt;
     JSContext *cx;
     int result;
@@ -5737,15 +5729,6 @@ main(int argc, char **argv, char **envp)
 
 #ifdef HAVE_SETLOCALE
     setlocale(LC_ALL, "");
-#endif
-
-#ifdef JS_THREADSAFE
-    if (PR_FAILURE == PR_NewThreadPrivateIndex(&gStackBaseThreadIndex, nullptr) ||
-        PR_FAILURE == PR_SetThreadPrivate(gStackBaseThreadIndex, &stackDummy)) {
-        return 1;
-    }
-#else
-    gStackBase = (uintptr_t) &stackDummy;
 #endif
 
 #ifdef XP_OS2

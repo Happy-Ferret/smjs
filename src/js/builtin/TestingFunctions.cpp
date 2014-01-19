@@ -39,7 +39,7 @@ static bool fuzzingSafe = false;
 static bool
 GetBuildConfiguration(JSContext *cx, unsigned argc, jsval *vp)
 {
-    RootedObject info(cx, JS_NewObject(cx, nullptr, nullptr, nullptr));
+    RootedObject info(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
     if (!info)
         return false;
     RootedValue value(cx);
@@ -246,14 +246,14 @@ GC(JSContext *cx, unsigned argc, jsval *vp)
 static bool
 MinorGC(JSContext *cx, unsigned argc, jsval *vp)
 {
-#ifdef JSGC_GENERATIONAL
     CallArgs args = CallArgsFromVp(argc, vp);
-
+#ifdef JSGC_GENERATIONAL
     if (args.get(0) == BooleanValue(true))
         cx->runtime()->gcStoreBuffer.setAboutToOverflow();
 
     MinorGC(cx, gcreason::API);
 #endif
+    args.rval().setUndefined();
     return true;
 }
 
@@ -832,7 +832,7 @@ MakeFinalizeObserver(JSContext *cx, unsigned argc, jsval *vp)
     if (!scope)
         return false;
 
-    JSObject *obj = JS_NewObjectWithGivenProto(cx, &FinalizeCounterClass, nullptr, scope);
+    JSObject *obj = JS_NewObjectWithGivenProto(cx, &FinalizeCounterClass, JS::NullPtr(), scope);
     if (!obj)
         return false;
 
@@ -1009,7 +1009,7 @@ ShellObjectMetadataCallback(JSContext *cx, JSObject **pmetadata)
 
     int stackIndex = 0;
     for (NonBuiltinScriptFrameIter iter(cx); !iter.done(); ++iter) {
-        if (iter.isFunctionFrame()) {
+        if (iter.isFunctionFrame() && iter.compartment() == cx->compartment()) {
             if (!JS_DefinePropertyById(cx, stack, INT_TO_JSID(stackIndex), ObjectValue(*iter.callee()),
                                        JS_PropertyStub, JS_StrictPropertyStub, 0))
             {
@@ -1128,6 +1128,30 @@ SetJitCompilerOption(JSContext *cx, unsigned argc, jsval *vp)
 }
 
 static bool
+GetJitCompilerOptions(JSContext *cx, unsigned argc, jsval *vp)
+{
+    RootedObject info(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+    if (!info)
+        return false;
+
+    RootedValue value(cx);
+
+#define JIT_COMPILER_MATCH(key, string)                         \
+    opt = JSJITCOMPILER_ ## key;                                \
+    value.setInt32(JS_GetGlobalJitCompilerOption(cx, opt));     \
+    if (!JS_SetProperty(cx, info, string, value))               \
+        return false;
+
+    JSJitCompilerOption opt = JSJITCOMPILER_NOT_AN_OPTION;
+    JIT_COMPILER_OPTIONS(JIT_COMPILER_MATCH);
+#undef JIT_COMPILER_MATCH
+
+    *vp = ObjectValue(*info);
+
+    return true;
+}
+
+static bool
 SetIonCheckGraphCoherency(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -1148,7 +1172,7 @@ class CloneBufferObject : public JSObject {
     static const Class class_;
 
     static CloneBufferObject *Create(JSContext *cx) {
-        RootedObject obj(cx, JS_NewObject(cx, Jsvalify(&class_), nullptr, nullptr));
+        RootedObject obj(cx, JS_NewObject(cx, Jsvalify(&class_), JS::NullPtr(), JS::NullPtr()));
         if (!obj)
             return nullptr;
         obj->setReservedSlot(DATA_SLOT, PrivateValue(nullptr));
@@ -1454,7 +1478,7 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
 "   10: Incremental GC in multiple slices\n"
 "   11: Verify post write barriers between instructions\n"
 "   12: Verify post write barriers between paints\n"
-"   13: Purge analysis state when memory is allocated\n"
+"   13: Check internal hashtables on minor GC\n"
 "  Period specifies that collection happens every n allocations.\n"),
 
     JS_FN_HELP("schedulegc", ScheduleGC, 1, 0,
@@ -1545,6 +1569,10 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
 "isAsmJSCompilationAvailable",
 "  Returns whether asm.js compilation is currently available or whether it is disabled\n"
 "  (e.g., by the debugger)."),
+
+    JS_FN_HELP("getJitCompilerOptions", GetJitCompilerOptions, 0, 0,
+"getCompilerOptions()",
+"Return an object describing some of the JIT compiler options.\n"),
 
     JS_FN_HELP("isAsmJSModule", IsAsmJSModule, 1, 0,
 "isAsmJSModule(fn)",

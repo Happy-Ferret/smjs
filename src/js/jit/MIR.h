@@ -53,7 +53,12 @@ MIRType MIRTypeFromValue(const js::Value &vp)
     _(Movable)       /* Allow LICM and GVN to move this instruction */          \
     _(Lowered)       /* (Debug only) has a virtual register */                  \
     _(Guard)         /* Not removable if uses == 0 */                           \
-    _(Folded)        /* Has constant folded uses not reflected in SSA */        \
+                                                                                \
+    /* Keep the flagged instruction in resume points and do not substitute this
+     * instruction by an UndefinedValue. This might be used by call inlining
+     * when a function argument is not used by the inlined instructions.
+     */                                                                         \
+    _(ImplicitlyUsed)                                                           \
                                                                                 \
     /* The instruction has been marked dead for lazy removal from resume
      * points.
@@ -4374,6 +4379,14 @@ class MPhi MOZ_FINAL : public MDefinition, public InlineForwardListNode<MPhi>
     uint32_t capacity_;
 #endif
 
+  protected:
+    MUse *getUseFor(size_t index) {
+        return &inputs_[index];
+    }
+
+  public:
+    INSTRUCTION_HEADER(Phi)
+
     MPhi(TempAllocator &alloc, uint32_t slot, MIRType resultType)
       : inputs_(alloc),
         slot_(slot),
@@ -4390,13 +4403,6 @@ class MPhi MOZ_FINAL : public MDefinition, public InlineForwardListNode<MPhi>
         setResultType(resultType);
     }
 
-  protected:
-    MUse *getUseFor(size_t index) {
-        return &inputs_[index];
-    }
-
-  public:
-    INSTRUCTION_HEADER(Phi)
     static MPhi *New(TempAllocator &alloc, uint32_t slot, MIRType resultType = MIRType_Value) {
         return new(alloc) MPhi(alloc, slot, resultType);
     }
@@ -4807,6 +4813,43 @@ class MRegExp : public MNullaryInstruction
     }
 };
 
+class MRegExpExec
+  : public MBinaryInstruction,
+    public MixPolicy<ObjectPolicy<1>, StringPolicy<0> >
+{
+  private:
+
+    MRegExpExec(MDefinition *regexp, MDefinition *string)
+      : MBinaryInstruction(string, regexp)
+    {
+        // May be object or null.
+        setResultType(MIRType_Value);
+    }
+
+  public:
+    INSTRUCTION_HEADER(RegExpExec)
+
+    static MRegExpExec *New(TempAllocator &alloc, MDefinition *regexp, MDefinition *string) {
+        return new(alloc) MRegExpExec(regexp, string);
+    }
+
+    MDefinition *string() const {
+        return getOperand(0);
+    }
+
+    MDefinition *regexp() const {
+        return getOperand(1);
+    }
+
+    TypePolicy *typePolicy() {
+        return this;
+    }
+
+    bool possiblyCalls() const {
+        return true;
+    }
+};
+
 class MRegExpTest
   : public MBinaryInstruction,
     public MixPolicy<ObjectPolicy<1>, StringPolicy<0> >
@@ -4831,6 +4874,44 @@ class MRegExpTest
     }
     MDefinition *regexp() const {
         return getOperand(1);
+    }
+
+    TypePolicy *typePolicy() {
+        return this;
+    }
+
+    bool possiblyCalls() const {
+        return true;
+    }
+};
+
+class MRegExpReplace
+  : public MTernaryInstruction,
+    public Mix3Policy<StringPolicy<0>, ObjectPolicy<1>, StringPolicy<2> >
+{
+  private:
+
+    MRegExpReplace(MDefinition *string, MDefinition *regexp, MDefinition *replacement)
+      : MTernaryInstruction(string, regexp, replacement)
+    {
+        setResultType(MIRType_String);
+    }
+
+  public:
+    INSTRUCTION_HEADER(RegExpReplace)
+
+    static MRegExpReplace *New(TempAllocator &alloc, MDefinition *string, MDefinition *regexp, MDefinition *replacement) {
+        return new(alloc) MRegExpReplace(string, regexp, replacement);
+    }
+
+    MDefinition *string() const {
+        return getOperand(0);
+    }
+    MDefinition *regexp() const {
+        return getOperand(1);
+    }
+    MDefinition *replacement() const {
+        return getOperand(2);
     }
 
     TypePolicy *typePolicy() {
@@ -6491,16 +6572,18 @@ class MGetPropertyCache
     CompilerRootPropertyName name_;
     bool idempotent_;
     bool allowGetters_;
+    bool monitoredResult_;
 
     CacheLocationList location_;
 
     InlinePropertyTable *inlinePropertyTable_;
 
-    MGetPropertyCache(MDefinition *obj, PropertyName *name)
+    MGetPropertyCache(MDefinition *obj, PropertyName *name, bool monitoredResult)
       : MUnaryInstruction(obj),
         name_(name),
         idempotent_(false),
         allowGetters_(false),
+        monitoredResult_(monitoredResult),
         location_(),
         inlinePropertyTable_(nullptr)
     {
@@ -6515,8 +6598,9 @@ class MGetPropertyCache
   public:
     INSTRUCTION_HEADER(GetPropertyCache)
 
-    static MGetPropertyCache *New(TempAllocator &alloc, MDefinition *obj, PropertyName *name) {
-        return new(alloc) MGetPropertyCache(obj, name);
+    static MGetPropertyCache *New(TempAllocator &alloc, MDefinition *obj, PropertyName *name,
+                                  bool monitoredResult) {
+        return new(alloc) MGetPropertyCache(obj, name, monitoredResult);
     }
 
     InlinePropertyTable *initInlinePropertyTable(TempAllocator &alloc, jsbytecode *pc) {
@@ -6548,6 +6632,9 @@ class MGetPropertyCache
     }
     bool allowGetters() const {
         return allowGetters_;
+    }
+    bool monitoredResult() const {
+        return monitoredResult_;
     }
     void setAllowGetters() {
         allowGetters_ = true;
@@ -7831,7 +7918,7 @@ class MGetDOMProperty
       : info_(jitinfo)
     {
         JS_ASSERT(jitinfo);
-        JS_ASSERT(jitinfo->type == JSJitInfo::Getter);
+        JS_ASSERT(jitinfo->type() == JSJitInfo::Getter);
 
         setOperand(0, obj);
 
@@ -7840,7 +7927,7 @@ class MGetDOMProperty
 
         // We are movable iff the jitinfo says we can be.
         if (isDomMovable()) {
-            JS_ASSERT(jitinfo->aliasSet != JSJitInfo::AliasEverything);
+            JS_ASSERT(jitinfo->aliasSet() != JSJitInfo::AliasEverything);
             setMovable();
         }
 
@@ -7870,7 +7957,7 @@ class MGetDOMProperty
         return info_->isMovable;
     }
     JSJitInfo::AliasSet domAliasSet() const {
-        return info_->aliasSet;
+        return info_->aliasSet();
     }
     size_t domMemberSlotIndex() const {
         MOZ_ASSERT(info_->isInSlot);
@@ -8492,24 +8579,24 @@ class MRestPar
     }
 };
 
-// Guard on an object being allocated in the current slice.
-class MGuardThreadLocalObject
+// Guard on an object being safe for writes by current parallel slice.
+// Must be either thread-local or else a handle into the destination array.
+class MGuardThreadExclusive
   : public MBinaryInstruction,
     public ObjectPolicy<1>
 {
-    MGuardThreadLocalObject(MDefinition *slice, MDefinition *obj)
+    MGuardThreadExclusive(MDefinition *slice, MDefinition *obj)
       : MBinaryInstruction(slice, obj)
     {
         setResultType(MIRType_None);
         setGuard();
-        setMovable();
     }
 
   public:
-    INSTRUCTION_HEADER(GuardThreadLocalObject);
+    INSTRUCTION_HEADER(GuardThreadExclusive);
 
-    static MGuardThreadLocalObject *New(TempAllocator &alloc, MDefinition *slice, MDefinition *obj) {
-        return new(alloc) MGuardThreadLocalObject(slice, obj);
+    static MGuardThreadExclusive *New(TempAllocator &alloc, MDefinition *slice, MDefinition *obj) {
+        return new(alloc) MGuardThreadExclusive(slice, obj);
     }
     MDefinition *forkJoinSlice() const {
         return getOperand(0);

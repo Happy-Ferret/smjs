@@ -416,7 +416,8 @@ class JSObject : public js::ObjectImpl
             elements[i].js::HeapSlot::~HeapSlot();
     }
 
-    bool rollbackProperties(js::ExclusiveContext *cx, uint32_t slotSpan);
+    static bool rollbackProperties(js::ExclusiveContext *cx, js::HandleObject obj,
+                                   uint32_t slotSpan);
 
     void nativeSetSlot(uint32_t slot, const js::Value &value) {
         JS_ASSERT(isNative());
@@ -760,6 +761,7 @@ class JSObject : public js::ObjectImpl
     }
 
     inline void setShouldConvertDoubleElements();
+    inline void clearShouldConvertDoubleElements();
 
     /* Packed information for this object's elements. */
     inline bool writeToIndexWouldMarkNotPacked(uint32_t index);
@@ -1533,6 +1535,11 @@ CheckAccess(JSContext *cx, JSObject *obj, HandleId id, JSAccessMode mode,
 
 extern bool
 IsDelegate(JSContext *cx, HandleObject obj, const Value &v, bool *result);
+
+// obj is a JSObject*, but we root it immediately up front. We do it
+// that way because we need a Rooted temporary in this method anyway.
+extern bool
+IsDelegateOfObject(JSContext *cx, HandleObject protoObj, JSObject* obj, bool *result);
 
 bool
 GetObjectElementOperationPure(ThreadSafeContext *cx, JSObject *obj, const Value &prop, Value *vp);

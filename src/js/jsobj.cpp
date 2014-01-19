@@ -1134,8 +1134,8 @@ JSObject::sealOrFreeze(JSContext *cx, HandleObject obj, ImmutabilityType it)
             StackShape::AutoRooter rooter(cx, &child);
             child.attrs |= getSealedOrFrozenAttributes(child.attrs, it);
 
-            if (!JSID_IS_EMPTY(child.propid))
-                MarkTypePropertyConfigured(cx, obj, child.propid);
+            if (!JSID_IS_EMPTY(child.propid) && it == FREEZE)
+                MarkTypePropertyNonWritable(cx, obj, child.propid);
 
             last = cx->compartment()->propertyTree.getChild(cx, last, obj->numFixedSlots(), child);
             if (!last)
@@ -3427,14 +3427,20 @@ UpdateShapeTypeAndValue(typename ExecutionModeTraits<mode>::ExclusiveContextType
             obj->nativeSetSlotWithType(cx->asExclusiveContext(), shape, value);
         }
     }
-    if (!shape->hasSlot() || !shape->writable() ||
-        !shape->hasDefaultGetter() || !shape->hasDefaultSetter())
-    {
+    if (!shape->hasSlot() || !shape->hasDefaultGetter() || !shape->hasDefaultSetter()) {
         if (mode == ParallelExecution) {
-            if (!IsTypePropertyIdMarkedConfigured(obj, id))
+            if (!IsTypePropertyIdMarkedNonData(obj, id))
                 return false;
         } else {
-            MarkTypePropertyConfigured(cx->asExclusiveContext(), obj, id);
+            MarkTypePropertyNonData(cx->asExclusiveContext(), obj, id);
+        }
+    }
+    if (!shape->writable()) {
+        if (mode == ParallelExecution) {
+            if (!IsTypePropertyIdMarkedNonWritable(obj, id))
+                return false;
+        } else {
+            MarkTypePropertyNonWritable(cx->asExclusiveContext(), obj, id);
         }
     }
     return true;
@@ -4886,7 +4892,7 @@ baseops::SetAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *a
         if (!JSObject::changePropertyAttributes(cx, nobj, shape, *attrsp))
             return false;
         if (*attrsp & JSPROP_READONLY)
-            MarkTypePropertyConfigured(cx, obj, id);
+            MarkTypePropertyNonWritable(cx, obj, id);
         return true;
     } else {
         return JSObject::setGenericAttributes(cx, nobj, id, attrsp);
@@ -4980,7 +4986,7 @@ js::WatchGuts(JSContext *cx, JS::HandleObject origObj, JS::HandleId id, JS::Hand
         if (!JSObject::sparsifyDenseElements(cx, obj))
             return false;
 
-        types::MarkTypePropertyConfigured(cx, obj, id);
+        types::MarkTypePropertyNonData(cx, obj, id);
     }
 
     WatchpointMap *wpmap = cx->compartment()->watchpointMap;
@@ -5246,7 +5252,13 @@ js::IsDelegate(JSContext *cx, HandleObject obj, const js::Value &v, bool *result
         *result = false;
         return true;
     }
-    RootedObject obj2(cx, &v.toObject());
+    return IsDelegateOfObject(cx, obj, &v.toObject(), result);
+}
+
+bool
+js::IsDelegateOfObject(JSContext *cx, HandleObject protoObj, JSObject* obj, bool *result)
+{
+    RootedObject obj2(cx, obj);
     for (;;) {
         if (!JSObject::getProto(cx, obj2, &obj2))
             return false;
@@ -5254,7 +5266,7 @@ js::IsDelegate(JSContext *cx, HandleObject obj, const js::Value &v, bool *result
             *result = false;
             return true;
         }
-        if (obj2 == obj) {
+        if (obj2 == protoObj) {
             *result = true;
             return true;
         }

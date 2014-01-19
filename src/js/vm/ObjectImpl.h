@@ -814,6 +814,9 @@ class ObjectElements
     void setShouldConvertDoubleElements() {
         flags |= CONVERT_DOUBLE_ELEMENTS;
     }
+    void clearShouldConvertDoubleElements() {
+        flags &= ~CONVERT_DOUBLE_ELEMENTS;
+    }
     bool isAsmJSArrayBuffer() const {
         return flags & ASMJS_ARRAY_BUFFER;
     }
@@ -1604,7 +1607,7 @@ inline void
 ObjectImpl::privateWriteBarrierPre(void **oldval)
 {
 #ifdef JSGC_INCREMENTAL
-    JS::shadow::Zone *shadowZone = this->shadowZone();
+    JS::shadow::Zone *shadowZone = this->shadowZoneFromAnyThread();
     if (shadowZone->needsBarrier()) {
         if (*oldval && getClass()->trace)
             getClass()->trace(shadowZone->barrierTracer(), this->asObjectPtr());

@@ -149,7 +149,9 @@
     _(OsrReturnValue)               \
     _(OsrArgumentsObject)           \
     _(RegExp)                       \
+    _(RegExpExec)                   \
     _(RegExpTest)                   \
+    _(RegExpReplace)                \
     _(Lambda)                       \
     _(LambdaForSingleton)           \
     _(LambdaPar)                    \
@@ -166,7 +168,7 @@
     _(GuardObjectType)              \
     _(GuardObjectIdentity)          \
     _(GuardClass)                   \
-    _(GuardThreadLocalObject)       \
+    _(GuardThreadExclusive)         \
     _(TypeBarrierV)                 \
     _(TypeBarrierO)                 \
     _(MonitorTypes)                 \

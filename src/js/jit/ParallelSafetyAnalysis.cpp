@@ -143,7 +143,7 @@ class ParallelSafetyVisitor : public MInstructionVisitor
     UNSAFE_OP(FilterArgumentsOrEval)
     UNSAFE_OP(CallDirectEval)
     SAFE_OP(BitNot)
-    UNSAFE_OP(TypeOf)
+    SAFE_OP(TypeOf)
     UNSAFE_OP(ToId)
     SAFE_OP(BitAnd)
     SAFE_OP(BitOr)
@@ -279,13 +279,15 @@ class ParallelSafetyVisitor : public MInstructionVisitor
     UNSAFE_OP(Pow)
     UNSAFE_OP(PowHalf)
     UNSAFE_OP(RegExpTest)
+    UNSAFE_OP(RegExpExec)
+    UNSAFE_OP(RegExpReplace)
     UNSAFE_OP(CallInstanceOf)
     UNSAFE_OP(FunctionBoundary)
     UNSAFE_OP(GuardString)
     UNSAFE_OP(NewDeclEnvObject)
     UNSAFE_OP(In)
     UNSAFE_OP(InArray)
-    SAFE_OP(GuardThreadLocalObject)
+    SAFE_OP(GuardThreadExclusive)
     SAFE_OP(CheckInterruptPar)
     SAFE_OP(CheckOverRecursedPar)
     SAFE_OP(FunctionDispatch)
@@ -654,6 +656,10 @@ ParallelSafetyVisitor::insertWriteGuard(MInstruction *writeInstruction,
             object = valueBeingWritten->toTypedArrayElements()->object();
             break;
 
+          case MDefinition::Op_TypedObjectElements:
+            object = valueBeingWritten->toTypedObjectElements()->object();
+            break;
+
           default:
             SpewMIR(writeInstruction, "cannot insert write guard for %s",
                     valueBeingWritten->opName());
@@ -680,8 +686,8 @@ ParallelSafetyVisitor::insertWriteGuard(MInstruction *writeInstruction,
     }
 
     MBasicBlock *block = writeInstruction->block();
-    MGuardThreadLocalObject *writeGuard =
-        MGuardThreadLocalObject::New(alloc(), forkJoinSlice(), object);
+    MGuardThreadExclusive *writeGuard =
+        MGuardThreadExclusive::New(alloc(), forkJoinSlice(), object);
     block->insertBefore(writeInstruction, writeGuard);
     writeGuard->adjustInputs(alloc(), writeGuard);
     return true;

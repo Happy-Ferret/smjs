@@ -1288,6 +1288,10 @@ struct JSRuntime : public JS::shadow::Runtime,
 
     int gcZeal() { return gcZeal_; }
 
+    bool upcomingZealousGC() {
+        return gcNextScheduled == 1;
+    }
+
     bool needZealousGC() {
         if (gcNextScheduled > 0 && --gcNextScheduled == 0) {
             if (gcZeal() == js::gc::ZealAllocValue ||
@@ -1303,6 +1307,7 @@ struct JSRuntime : public JS::shadow::Runtime,
     }
 #else
     int gcZeal() { return 0; }
+    bool upcomingZealousGC() { return false; }
     bool needZealousGC() { return false; }
 #endif
 
@@ -1642,8 +1647,6 @@ struct JSRuntime : public JS::shadow::Runtime,
     size_t              noGCOrAllocationCheck;
 #endif
 
-    bool                jitHardening;
-
     bool                jitSupportsFloatingPoint;
 
     // Used to reset stack limit after a signaled interrupt (i.e. ionStackLimit_ = -1)
@@ -1761,11 +1764,6 @@ struct JSRuntime : public JS::shadow::Runtime,
     };
 
     void triggerOperationCallback(OperationCallbackTrigger trigger);
-
-    void setJitHardening(bool enabled);
-    bool getJitHardening() const {
-        return jitHardening;
-    }
 
     void addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::RuntimeSizes *runtime);
 
