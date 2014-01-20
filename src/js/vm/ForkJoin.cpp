@@ -331,12 +331,13 @@ class ForkJoinShared : public ParallelJob, public Monitor
     /////////////////////////////////////////////////////////////////////////
     // Constant fields
 
-    JSContext *const cx_;          // Current context
-    ThreadPool *const threadPool_; // The thread pool.
-    HandleObject fun_;             // The JavaScript function to execute.
-    uint16_t numSlices_;           // Total number of slices. Dynamically changed
-    PRLock *cxLock_;               // Locks cx_ for parallel VM calls.
-    ParallelBailoutRecord *const records_; // Bailout records for each slice
+    JSContext *const cx_;                   // Current context
+    ThreadPool *const threadPool_;          // The thread pool.
+    HandleObject fun_;                      // The JavaScript function to
+                                            // execute.
+    uint16_t numSlices_;                    // Total number of slices. Dynamically changed
+    Mutex cxLock_;                          // Locks cx_ for parallel VM calls.
+    ParallelBailoutRecord *const records_;  // Bailout records for each slice
 
     /////////////////////////////////////////////////////////////////////////
     // Per-thread arenas
@@ -410,8 +411,8 @@ class ForkJoinShared : public ParallelJob, public Monitor
     JS::Zone *zone() { return cx_->zone(); }
     JSCompartment *compartment() { return cx_->compartment(); }
 
-    JSContext *acquireContext() { PR_Lock(cxLock_); return cx_; }
-    void releaseContext() { PR_Unlock(cxLock_); }
+    JSContext *acquireContext() { cxLock_.lock(); return cx_; }
+    void releaseContext() { cxLock_.unlock(); }
 };
 
 class AutoEnterWarmup
@@ -1319,7 +1320,7 @@ ForkJoinShared::ForkJoinShared(JSContext *cx,
     threadPool_(threadPool),
     fun_(fun),
     numSlices_(numSlices),
-    cxLock_(nullptr),
+    cxLock_(),
     records_(records),
     allocators_(cx),
     gcRequested_(false),
@@ -1346,8 +1347,7 @@ ForkJoinShared::init()
     if (!Monitor::init())
         return false;
 
-    cxLock_ = PR_NewLock();
-    if (!cxLock_)
+    if (!cxLock_.initialize())
         return false;
 
     for (unsigned i = 0; i < (threadPool_->numWorkers() + 1); i++) {
@@ -1366,8 +1366,6 @@ ForkJoinShared::init()
 
 ForkJoinShared::~ForkJoinShared()
 {
-    PR_DestroyLock(cxLock_);
-
     while (allocators_.length() > 0)
         js_delete(allocators_.popCopy());
 }

@@ -4,11 +4,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+
 #include "vm/ThreadPool.h"
 
 #include "mozilla/Atomics.h"
 
-#include "jslock.h"
+#include "threading/Thread.h"
 
 #include "vm/ForkJoin.h"
 #include "vm/Monitor.h"
@@ -210,16 +211,13 @@ ThreadPoolWorker::start()
     // Set state to active now, *before* the thread starts:
     state_ = ACTIVE;
 
-    if (!PR_CreateThread(PR_USER_THREAD,
-                         ThreadMain, this,
-                         PR_PRIORITY_NORMAL, PR_LOCAL_THREAD,
-                         PR_UNJOINABLE_THREAD,
-                         WORKER_THREAD_STACK_SIZE))
-    {
+    Thread thread;
+    if (!thread.start(ThreadMain, this)) {
         // If the thread failed to start, call it TERMINATED.
         state_ = TERMINATED;
         return false;
     }
+    thread.detach();
 
     return true;
 #endif
@@ -358,7 +356,7 @@ ThreadPool::ThreadPool(JSRuntime *rt)
   : runtime_(rt),
     mainWorker_(nullptr),
     activeWorkers_(0),
-    joinBarrier_(nullptr),
+    joinBarrier_(),
     job_(nullptr),
 #ifdef DEBUG
     stolenSlices_(0),
@@ -369,10 +367,6 @@ ThreadPool::ThreadPool(JSRuntime *rt)
 ThreadPool::~ThreadPool()
 {
     terminateWorkers();
-#ifdef JS_THREADSAFE
-    if (joinBarrier_)
-        PR_DestroyCondVar(joinBarrier_);
-#endif
 }
 
 bool
@@ -381,11 +375,10 @@ ThreadPool::init()
 #ifdef JS_THREADSAFE
     if (!Monitor::init())
         return false;
-    joinBarrier_ = PR_NewCondVar(lock_);
-    return !!joinBarrier_;
-#else
-    return true;
+    if (!joinBarrier_.initialize())
+        return false;
 #endif
+    return true;
 }
 
 uint32_t

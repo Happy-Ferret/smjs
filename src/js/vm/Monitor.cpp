@@ -12,14 +12,11 @@ bool
 Monitor::init()
 {
 #ifdef JS_THREADSAFE
-    lock_ = PR_NewLock();
-    if (!lock_)
+    if (!lock_.initialize())
         return false;
 
-    condVar_ = PR_NewCondVar(lock_);
-    if (!condVar_)
+    if (!condVar_.initialize())
         return false;
 #endif
-
     return true;
 }

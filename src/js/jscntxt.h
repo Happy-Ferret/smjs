@@ -1035,9 +1035,9 @@ class AutoLockForExclusiveAccess
         runtime = rt;
         if (runtime->numExclusiveThreads) {
             runtime->assertCanLock(JSRuntime::ExclusiveAccessLock);
-            PR_Lock(runtime->exclusiveAccessLock);
+            runtime->exclusiveAccessLock.lock();
 #ifdef DEBUG
-            runtime->exclusiveAccessOwner = PR_GetCurrentThread();
+            runtime->exclusiveAccessOwner = Thread::current();
 #endif
         } else {
             JS_ASSERT(!runtime->mainThreadHasExclusiveAccess);
@@ -1054,11 +1054,12 @@ class AutoLockForExclusiveAccess
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
         init(rt);
     }
+
     ~AutoLockForExclusiveAccess() {
         if (runtime->numExclusiveThreads) {
-            JS_ASSERT(runtime->exclusiveAccessOwner == PR_GetCurrentThread());
-            runtime->exclusiveAccessOwner = nullptr;
-            PR_Unlock(runtime->exclusiveAccessLock);
+            JS_ASSERT(runtime->exclusiveAccessOwner == Thread::current());
+            runtime->exclusiveAccessOwner = Thread::none();
+            runtime->exclusiveAccessLock.unlock();
         } else {
             JS_ASSERT(runtime->mainThreadHasExclusiveAccess);
             runtime->mainThreadHasExclusiveAccess = false;
@@ -1090,9 +1091,9 @@ class AutoLockForCompilation
         runtime = rt;
         if (runtime->numCompilationThreads) {
             runtime->assertCanLock(JSRuntime::CompilationLock);
-            PR_Lock(runtime->compilationLock);
+            runtime->compilationLock.lock();
 #ifdef DEBUG
-            runtime->compilationLockOwner = PR_GetCurrentThread();
+            runtime->compilationLockOwner = Thread::current();
 #endif
         } else {
 #ifdef DEBUG
@@ -1114,11 +1115,11 @@ class AutoLockForCompilation
     ~AutoLockForCompilation() {
         if (runtime) {
             if (runtime->numCompilationThreads) {
-                JS_ASSERT(runtime->compilationLockOwner == PR_GetCurrentThread());
+                JS_ASSERT(runtime->compilationLockOwner == Thread::current());
 #ifdef DEBUG
-                runtime->compilationLockOwner = nullptr;
+                runtime->compilationLockOwner = Thread::none();
 #endif
-                PR_Unlock(runtime->compilationLock);
+                runtime->compilationLock.unlock();
             } else {
 #ifdef DEBUG
                 JS_ASSERT(runtime->mainThreadHasCompilationLock);

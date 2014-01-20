@@ -36,11 +36,6 @@
 #include <crtdbg.h>   /* for _CrtSetReportMode */
 #include <stdlib.h>   /* for _set_invalid_parameter_handler */
 #endif
-
-#ifdef JS_THREADSAFE
-#include "prinit.h"
-#endif
-
 #endif
 
 #ifdef XP_UNIX
@@ -52,6 +47,10 @@ extern int gettimeofday(struct timeval *tv);
 #include <sys/time.h>
 
 #endif /* XP_UNIX */
+
+#ifdef JS_THREADSAFE
+#include "threading/Once.h"
+#endif
 
 #define PRMJ_YEAR_DAYS 365L
 #define PRMJ_FOUR_YEARS_DAYS (4 * PRMJ_YEAR_DAYS + 1)
@@ -145,14 +144,14 @@ NowCalibrate()
 #define LASTLOCK_SPINCOUNT 4096
 
 #ifdef JS_THREADSAFE
-static PRStatus
+static bool
 NowInit(void)
 {
     memset(&calibration, 0, sizeof(calibration));
     NowCalibrate();
     InitializeCriticalSectionAndSpinCount(&calibration.calibration_lock, CALIBRATIONLOCK_SPINCOUNT);
     InitializeCriticalSectionAndSpinCount(&calibration.data_lock, DATALOCK_SPINCOUNT);
-    return PR_SUCCESS;
+    return true;
 }
 
 void
@@ -167,7 +166,7 @@ PRMJ_NowShutdown()
 #define MUTEX_UNLOCK(m) LeaveCriticalSection(m)
 #define MUTEX_SETSPINCOUNT(m, c) SetCriticalSectionSpinCount((m),(c))
 
-static PRCallOnceType calibrationOnce = { 0 };
+static js::Once calibrationOnce;
 
 #else
 
@@ -283,7 +282,7 @@ PRMJ_Now(void)
 
     /* For non threadsafe platforms, NowInit is not necessary */
 #ifdef JS_THREADSAFE
-    PR_CallOnce(&calibrationOnce, NowInit);
+    calibrationOnce.call(NowInit);
 #endif
     do {
         if (!calibration.calibrated || needsCalibration) {

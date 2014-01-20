@@ -17,6 +17,11 @@
 
 #include "js/Utility.h"
 
+#ifdef JS_THREADSAFE
+#include "threading/ConditionVariable.h"
+#include "threading/Mutex.h"
+#endif
+
 namespace js {
 
 // A base class used for types intended to be used in a parallel
@@ -30,28 +35,26 @@ class Monitor
     friend class AutoLockMonitor;
     friend class AutoUnlockMonitor;
 
-    PRLock *lock_;
-    PRCondVar *condVar_;
+#ifdef JS_THREADSAFE
+    Mutex lock_;
+    ConditionVariable condVar_;
+#endif
 
   public:
     Monitor()
-      : lock_(nullptr),
-        condVar_(nullptr)
-    { }
-
-    ~Monitor() {
 #ifdef JS_THREADSAFE
-        if (lock_)
-            PR_DestroyLock(lock_);
-        if (condVar_)
-            PR_DestroyCondVar(condVar_);
+      : lock_(),
+        condVar_()
 #endif
-    }
+    { }
 
     bool init();
 };
 
 class AutoLockMonitor
+#ifdef JS_THREADSAFE
+  : private AutoMutexLock
+#endif
 {
   private:
 #ifdef JS_THREADSAFE
@@ -61,33 +64,22 @@ class AutoLockMonitor
   public:
     AutoLockMonitor(Monitor &monitor)
 #ifdef JS_THREADSAFE
-      : monitor(monitor)
-    {
-        PR_Lock(monitor.lock_);
-    }
-#else
-    {}
+      : AutoMutexLock(monitor.lock_),
+        monitor(monitor)
 #endif
-
-    ~AutoLockMonitor() {
-#ifdef JS_THREADSAFE
-        PR_Unlock(monitor.lock_);
-#endif
-    }
+    { }
 
     bool isFor(Monitor &other) const {
 #ifdef JS_THREADSAFE
-        return monitor.lock_ == other.lock_;
+        return &monitor.lock_ == &other.lock_;
 #else
         return true;
 #endif
     }
 
-    void wait(PRCondVar *condVar) {
+    void wait(ConditionVariable& condVar) {
 #ifdef JS_THREADSAFE
-        mozilla::DebugOnly<PRStatus> status =
-          PR_WaitCondVar(condVar, PR_INTERVAL_NO_TIMEOUT);
-        MOZ_ASSERT(status == PR_SUCCESS);
+        condVar.wait(monitor.lock_);
 #endif
     }
 
@@ -97,10 +89,9 @@ class AutoLockMonitor
 #endif
     }
 
-    void notify(PRCondVar *condVar) {
+    void notify(ConditionVariable& condVar) {
 #ifdef JS_THREADSAFE
-        mozilla::DebugOnly<PRStatus> status = PR_NotifyCondVar(condVar);
-        MOZ_ASSERT(status == PR_SUCCESS);
+        condVar.signal();
 #endif
     }
 
@@ -110,10 +101,9 @@ class AutoLockMonitor
 #endif
     }
 
-    void notifyAll(PRCondVar *condVar) {
+    void notifyAll(ConditionVariable& condVar) {
 #ifdef JS_THREADSAFE
-        mozilla::DebugOnly<PRStatus> status = PR_NotifyAllCondVar(monitor.condVar_);
-        MOZ_ASSERT(status == PR_SUCCESS);
+        condVar.broadcast();
 #endif
     }
 
@@ -125,6 +115,9 @@ class AutoLockMonitor
 };
 
 class AutoUnlockMonitor
+#ifdef JS_THREADSAFE
+  : private AutoMutexUnlock
+#endif
 {
   private:
 #ifdef JS_THREADSAFE
@@ -134,23 +127,14 @@ class AutoUnlockMonitor
   public:
     AutoUnlockMonitor(Monitor &monitor)
 #ifdef JS_THREADSAFE
-      : monitor(monitor)
-    {
-        PR_Unlock(monitor.lock_);
-    }
-#else
-    {}
+      : AutoMutexUnlock(monitor.lock_),
+        monitor(monitor)
 #endif
-
-    ~AutoUnlockMonitor() {
-#ifdef JS_THREADSAFE
-        PR_Lock(monitor.lock_);
-#endif
-    }
+    { }
 
     bool isFor(Monitor &other) const {
 #ifdef JS_THREADSAFE
-        return monitor.lock_ == other.lock_;
+        return &monitor.lock_ == &other.lock_;
 #else
         return true;
 #endif

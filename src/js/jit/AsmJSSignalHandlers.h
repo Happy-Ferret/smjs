@@ -11,6 +11,7 @@ struct JSRuntime;
 
 #ifdef XP_MACOSX
 # include <mach/mach.h>
+# include "threading/thread.h"
 # include "jslock.h"
 #endif
 
@@ -36,7 +37,7 @@ TriggerOperationCallbackForAsmJSCode(JSRuntime *rt);
 class AsmJSMachExceptionHandler
 {
     bool installed_;
-    PRThread *thread_;
+    Thread thread_;
     mach_port_t port_;
 
     void uninstall();

@@ -50,7 +50,8 @@ static FILE *PerfFilePtr = nullptr;
 
 #ifdef JS_THREADSAFE
 # include "jslock.h"
-static PRLock *PerfMutex;
+# include "threading/Mutex.h"
+static Mutex PerfMutex;
 #endif
 
 static bool
@@ -96,8 +97,7 @@ js::jit::CheckPerf() {
 
         if (PerfMode != PERF_MODE_NONE) {
 #ifdef JS_THREADSAFE
-            PerfMutex = PR_NewLock();
-            if (!PerfMutex)
+            if (!PerfMutex.initialize())
                 MOZ_CRASH();
 #endif
 
@@ -138,7 +138,7 @@ lockPerfMap(void)
         return false;
 
 #ifdef JS_THREADSAFE
-    PR_Lock(PerfMutex);
+    PerfMutex.lock();
 #endif
 
     JS_ASSERT(PerfFilePtr);
@@ -151,7 +151,7 @@ unlockPerfMap()
     JS_ASSERT(PerfFilePtr);
     fflush(PerfFilePtr);
 #ifdef JS_THREADSAFE
-    PR_Unlock(PerfMutex);
+    PerfMutex.unlock();
 #endif
 }
 

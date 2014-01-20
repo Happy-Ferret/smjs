@@ -20,6 +20,10 @@
 #include "js/Tracer.h"
 #include "js/Vector.h"
 
+#include "threading/ConditionVariable.h"
+#include "threading/Mutex.h"
+#include "threading/Thread.h"
+
 class JSAtom;
 struct JSCompartment;
 class JSFlatString;
@@ -790,12 +794,12 @@ class GCHelperThread {
     static const size_t FREE_ARRAY_LENGTH = FREE_ARRAY_SIZE / sizeof(void *);
 
     JSRuntime         *const rt;
-    PRThread          *thread;
-    PRCondVar         *wakeup;
-    PRCondVar         *done;
     volatile State    state;
+    Thread            thread;
+    ConditionVariable wakeup;
+    ConditionVariable done;
 
-    void wait(PRCondVar *which);
+    void wait(ConditionVariable& which);
 
     bool              sweepFlag;
     bool              shrinkFlag;
@@ -827,9 +831,9 @@ class GCHelperThread {
   public:
     GCHelperThread(JSRuntime *rt)
       : rt(rt),
-        thread(nullptr),
-        wakeup(nullptr),
-        done(nullptr),
+        thread(),
+        wakeup(),
+        done(),
         state(IDLE),
         sweepFlag(false),
         shrinkFlag(false),
@@ -864,8 +868,8 @@ class GCHelperThread {
         backgroundAllocation = false;
     }
 
-    PRThread *getThread() const {
-        return thread;
+    Thread::Id getThreadId() const {
+        return thread.id();
     }
 
     bool onBackgroundThread();

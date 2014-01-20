@@ -92,7 +92,7 @@ class ThreadPool : public Monitor
 
     // The number of active workers. Should only access under lock.
     uint32_t activeWorkers_;
-    PRCondVar *joinBarrier_;
+    ConditionVariable joinBarrier_;
 
     // The current job.
     ParallelJob *job_;

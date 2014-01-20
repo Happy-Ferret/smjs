@@ -389,16 +389,13 @@ WorkerThreadState::init()
     if (!runtime->useHelperThreads())
         return true;
 
-    workerLock = PR_NewLock();
-    if (!workerLock)
+    if (!workerLock.initialize())
         return false;
 
-    consumerWakeup = PR_NewCondVar(workerLock);
-    if (!consumerWakeup)
+    if (!consumerWakeup.initialize())
         return false;
 
-    producerWakeup = PR_NewCondVar(workerLock);
-    if (!producerWakeup)
+    if (!producerWakeup.initialize())
         return false;
 
     threads = (WorkerThread*) js_pod_calloc<WorkerThread>(runtime->workerThreadCount());
@@ -410,10 +407,8 @@ WorkerThreadState::init()
         helper.runtime = runtime;
         helper.threadData.construct(runtime);
         helper.threadData.ref().addToThreadList();
-        helper.thread = PR_CreateThread(PR_USER_THREAD,
-                                        WorkerThread::ThreadMain, &helper,
-                                        PR_PRIORITY_NORMAL, PR_LOCAL_THREAD, PR_JOINABLE_THREAD, WORKER_STACK_SIZE);
-        if (!helper.thread || !helper.threadData.ref().init()) {
+        if (!helper.thread.start(WorkerThread::ThreadMain, &helper) ||
+                !helper.threadData.ref().init()) {
             for (size_t j = 0; j < runtime->workerThreadCount(); j++)
                 threads[j].destroy();
             js_free(threads);
@@ -451,24 +446,15 @@ WorkerThreadState::~WorkerThreadState()
 {
     JS_ASSERT(!threads);
     JS_ASSERT(parseFinishedList.empty());
-
-    if (workerLock)
-        PR_DestroyLock(workerLock);
-
-    if (consumerWakeup)
-        PR_DestroyCondVar(consumerWakeup);
-
-    if (producerWakeup)
-        PR_DestroyCondVar(producerWakeup);
 }
 
 void
 WorkerThreadState::lock()
 {
     runtime->assertCanLock(JSRuntime::WorkerThreadStateLock);
-    PR_Lock(workerLock);
+    workerLock.lock();
 #ifdef DEBUG
-    lockOwner = PR_GetCurrentThread();
+    lockOwner = Thread::current();
 #endif
 }
 
@@ -477,16 +463,16 @@ WorkerThreadState::unlock()
 {
     JS_ASSERT(isLocked());
 #ifdef DEBUG
-    lockOwner = nullptr;
+    lockOwner = Thread::none();
 #endif
-    PR_Unlock(workerLock);
+    workerLock.unlock();
 }
 
 #ifdef DEBUG
 bool
 WorkerThreadState::isLocked()
 {
-    return lockOwner == PR_GetCurrentThread();
+    return lockOwner == Thread::current();
 }
 #endif
 
@@ -495,14 +481,20 @@ WorkerThreadState::wait(CondVar which, uint32_t millis)
 {
     JS_ASSERT(isLocked());
 #ifdef DEBUG
-    lockOwner = nullptr;
+    lockOwner = Thread::none();
 #endif
-    DebugOnly<PRStatus> status =
-        PR_WaitCondVar((which == CONSUMER) ? consumerWakeup : producerWakeup,
-                       millis ? PR_MillisecondsToInterval(millis) : PR_INTERVAL_NO_TIMEOUT);
-    JS_ASSERT(status == PR_SUCCESS);
+    ConditionVariable* cv;
+    if (which == CONSUMER)
+      cv = &consumerWakeup;
+    else
+      cv = &producerWakeup;
+
+    if (millis > 0)
+      cv->wait(workerLock, millis * PRMJ_USEC_PER_MSEC);
+    else
+      cv->wait(workerLock);
 #ifdef DEBUG
-    lockOwner = PR_GetCurrentThread();
+    lockOwner = Thread::current();
 #endif
 }
 
@@ -510,14 +502,20 @@ void
 WorkerThreadState::notifyAll(CondVar which)
 {
     JS_ASSERT(isLocked());
-    PR_NotifyAllCondVar((which == CONSUMER) ? consumerWakeup : producerWakeup);
+    if (which == CONSUMER)
+      consumerWakeup.broadcast();
+    else
+      producerWakeup.broadcast();
 }
 
 void
 WorkerThreadState::notifyOne(CondVar which)
 {
     JS_ASSERT(isLocked());
-    PR_NotifyCondVar((which == CONSUMER) ? consumerWakeup : producerWakeup);
+    if (which == CONSUMER)
+      consumerWakeup.signal();
+    else
+      producerWakeup.signal();
 }
 
 bool
@@ -678,7 +676,7 @@ WorkerThread::destroy()
 {
     WorkerThreadState &state = *runtime->workerThreadState;
 
-    if (thread) {
+    if (thread.running()) {
         {
             AutoLockWorkerThreadState lock(state);
             terminate = true;
@@ -687,7 +685,7 @@ WorkerThread::destroy()
             state.notifyAll(WorkerThreadState::PRODUCER);
         }
 
-        PR_JoinThread(thread);
+        thread.join();
     }
 
     if (!threadData.empty()) {
@@ -700,7 +698,7 @@ WorkerThread::destroy()
 void
 WorkerThread::ThreadMain(void *arg)
 {
-    PR_SetCurrentThreadName("Analysis Helper");
+    Thread::setName("Analysis Helper");
     static_cast<WorkerThread *>(arg)->threadLoop();
 }
 
