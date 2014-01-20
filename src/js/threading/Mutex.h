@@ -56,6 +56,40 @@ class Mutex {
 #endif
 };
 
+
+class AutoMutexLock {
+  public:
+    inline AutoMutexLock(Mutex& mutex)
+      : mutex_(&mutex)
+    {
+        mutex_->lock();
+    }
+
+    inline ~AutoMutexLock() {
+        mutex_->unlock();
+    }
+
+  private:
+    Mutex* mutex_;
+};
+
+
+class AutoMutexUnlock {
+  public:
+    inline AutoMutexUnlock(Mutex& mutex)
+      : mutex_(&mutex)
+    {
+        mutex_->unlock();
+    }
+
+    inline ~AutoMutexUnlock() {
+        mutex_->lock();
+    }
+
+  private:
+    Mutex* mutex_;
+};
+
 } // namespace js
 
 #endif // threading_Mutex_h
