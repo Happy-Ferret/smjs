@@ -40,9 +40,6 @@
 #include "jsatom.h"
 #include "jscntxt.h"
 #include "jsfun.h"
-#ifdef JS_THREADSAFE
-#include "jslock.h"
-#endif
 #include "jsobj.h"
 #include "jsprf.h"
 #include "jsscript.h"

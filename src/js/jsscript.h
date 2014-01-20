@@ -13,9 +13,6 @@
 #include "mozilla/PodOperations.h"
 
 #include "jsatom.h"
-#ifdef JS_THREADSAFE
-#include "jslock.h"
-#endif
 #include "jsobj.h"
 #include "jsopcode.h"
 #include "jstypes.h"

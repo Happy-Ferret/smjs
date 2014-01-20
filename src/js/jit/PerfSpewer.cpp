@@ -49,7 +49,6 @@ static bool PerfChecked = false;
 static FILE *PerfFilePtr = nullptr;
 
 #ifdef JS_THREADSAFE
-# include "jslock.h"
 # include "threading/Mutex.h"
 static Mutex PerfMutex;
 #endif

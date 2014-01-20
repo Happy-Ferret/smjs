@@ -12,7 +12,6 @@ struct JSRuntime;
 #ifdef XP_MACOSX
 # include <mach/mach.h>
 # include "threading/thread.h"
-# include "jslock.h"
 #endif
 
 namespace js {

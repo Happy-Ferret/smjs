@@ -15,7 +15,6 @@
 #include "mozilla/ThreadLocal.h"
 
 #include "jscntxt.h"
-#include "jslock.h"
 #include "jsprf.h"
 
 #include "builtin/TypedObject.h"

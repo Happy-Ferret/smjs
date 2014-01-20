@@ -18,7 +18,6 @@
 #include "mozilla/PodOperations.h"
 
 #include "jscntxt.h"
-#include "jslock.h"
 
 #include "frontend/TokenStream.h"
 #include "jit/Ion.h"

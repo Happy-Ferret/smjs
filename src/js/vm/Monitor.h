@@ -13,8 +13,6 @@
 
 #include <stddef.h>
 
-#include "jslock.h"
-
 #include "js/Utility.h"
 
 #ifdef JS_THREADSAFE
