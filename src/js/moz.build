@@ -334,6 +334,7 @@ if CONFIG['ENABLE_ION']:
 if CONFIG['OS_ARCH'] == 'WINNT':
     SOURCES += [
         'assembler/jit/ExecutableAllocatorWin.cpp',
+        'threading/windows/Mutex.cpp',
         'yarr/OSAllocatorWin.cpp',
     ]
 elif CONFIG['OS_ARCH'] == 'OS2':
@@ -344,6 +345,7 @@ elif CONFIG['OS_ARCH'] == 'OS2':
 else:
     SOURCES += [
         'assembler/jit/ExecutableAllocatorPosix.cpp',
+        'threading/posix/Mutex.cpp',
         'yarr/OSAllocatorPosix.cpp',
     ]
 
