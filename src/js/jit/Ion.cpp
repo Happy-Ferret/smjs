@@ -7,6 +7,7 @@
 #include "jit/Ion.h"
 
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/ThreadLocal.h"
 
 #include "jscompartment.h"
 #include "jsworkers.h"
@@ -47,6 +48,7 @@
 #include "jsinferinlines.h"
 #include "jsobjinlines.h"
 
+using mozilla::ThreadLocal;
 using namespace js;
 using namespace js::jit;
 
@@ -57,18 +59,21 @@ JS_STATIC_ASSERT(sizeof(JitCode) % gc::CellSize == 0);
 
 #ifdef JS_THREADSAFE
 static bool IonTLSInitialized = false;
-static unsigned IonTLSIndex;
+static ThreadLocal<IonContext*> TLSIonContext;
 
 static inline IonContext *
 CurrentIonContext()
 {
-    return (IonContext *)PR_GetThreadPrivate(IonTLSIndex);
+    if (TLSIonContext.initialized())
+        return TLSIonContext.get();
+    else
+        return nullptr;
 }
 
-bool
+void
 jit::SetIonContext(IonContext *ctx)
 {
-    return PR_SetThreadPrivate(IonTLSIndex, ctx) == PR_SUCCESS;
+    TLSIonContext.set(ctx);
 }
 
 #else
@@ -81,11 +86,10 @@ CurrentIonContext()
     return GlobalIonContext;
 }
 
-bool
+void
 jit::SetIonContext(IonContext *ctx)
 {
     GlobalIonContext = ctx;
-    return true;
 }
 #endif
 
@@ -156,8 +160,7 @@ jit::InitializeIon()
 {
 #ifdef JS_THREADSAFE
     if (!IonTLSInitialized) {
-        PRStatus status = PR_NewThreadPrivateIndex(&IonTLSIndex, nullptr);
-        if (status != PR_SUCCESS)
+        if (!TLSIonContext.init())
             return false;
 
         IonTLSInitialized = true;
