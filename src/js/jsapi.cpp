@@ -65,6 +65,9 @@
 #include "js/CharacterEncoding.h"
 #include "js/SliceBudget.h"
 #include "js/StructuredClone.h"
+#ifdef JS_THREADSAFE
+#include "threading/Thread.h"
+#endif
 #if ENABLE_INTL_API
 #include "unicode/uclean.h"
 #include "unicode/utypes.h"
@@ -5879,7 +5882,7 @@ JS_PUBLIC_API(intptr_t)
 JS_GetCurrentThread()
 {
 #ifdef JS_THREADSAFE
-    return reinterpret_cast<intptr_t>(PR_GetCurrentThread());
+    return Thread::current();
 #else
     return 0;
 #endif
