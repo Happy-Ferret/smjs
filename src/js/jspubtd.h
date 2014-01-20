@@ -20,6 +20,10 @@
 
 #include "js/TypeDecls.h"
 
+#ifdef JS_THREADSAFE
+# include "threading/Once.h"
+#endif
+
 #if defined(JSGC_ROOT_ANALYSIS) || defined(JSGC_USE_EXACT_ROOTING) || defined(JS_DEBUG)
 # define JSGC_TRACK_EXACT_ROOTS
 #endif
@@ -163,7 +167,7 @@ class                                       JSFlatString;
 class                                       JSStableString;  // long story
 
 #ifdef JS_THREADSAFE
-typedef struct PRCallOnceType   JSCallOnceType;
+typedef js::Once                JSCallOnceType;
 #else
 typedef bool                    JSCallOnceType;
 #endif
