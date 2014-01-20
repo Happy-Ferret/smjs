@@ -336,6 +336,7 @@ if CONFIG['OS_ARCH'] == 'WINNT':
         'assembler/jit/ExecutableAllocatorWin.cpp',
         'threading/windows/ConditionVariable.cpp',
         'threading/windows/Mutex.cpp',
+        'threading/windows/Thread.cpp',
         'yarr/OSAllocatorWin.cpp',
     ]
 elif CONFIG['OS_ARCH'] == 'OS2':
@@ -348,6 +349,7 @@ else:
         'assembler/jit/ExecutableAllocatorPosix.cpp',
         'threading/posix/ConditionVariable.cpp',
         'threading/posix/Mutex.cpp',
+        'threading/posix/Thread.cpp',
         'yarr/OSAllocatorPosix.cpp',
     ]
 
