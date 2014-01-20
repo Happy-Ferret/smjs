@@ -152,6 +152,7 @@ UNIFIED_SOURCES += [
     'jswrapper.cpp',
     'perf/jsperf.cpp',
     'prmjtime.cpp',
+    'threading/Once.cpp',
     'vm/ArgumentsObject.cpp',
     'vm/CallNonGenericMethod.cpp',
     'vm/CharacterEncoding.cpp',
