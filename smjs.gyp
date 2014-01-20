@@ -1,20 +1,17 @@
 {
-  'variables': {
-    'target_arch%': 'x64',
-  },
-
   'target_defaults': {
     'default_configuration': 'Release',
 
     # XXX this should probably be specified in common.gypi
     'target_conditions': [
-      ['target_arch=="x64"', {
+      ['target_arch == "x64"', {
         'msvs_configuration_platform': 'x64'
       }]
     ],
 
     'configurations': {
       'Debug': {
+        'defines': ['DEBUG', 'JS_DEBUG', 'JS_GC_ZEAL'],
         'cflags': ['-g', '-O0'],
       },
       'Release': {
@@ -44,7 +41,10 @@
         'ENABLE_YARR_JIT=1',
         'JS_DEFAULT_JITREPORT_GRANULARITY=3',
         'JS_ION=1',
+        'JS_THREADSAFE=1',
+        'JSGC_GENERATIONAL=1',
         'JSGC_INCREMENTAL=1',
+        'JSGC_USE_EXACT_ROOTING=1',
 
         # Library output
         'STATIC_EXPORTABLE_JS_API=1',  # Re-exportable static library
@@ -78,12 +78,24 @@
           ],
         }],
         ['OS == "linux"', {
-          'defines': ['JS_HAVE_ENDIAN_H=1'],
+          'defines': [
+            'JS_HAVE_ENDIAN_H=1',
+            'XP_UNIX=1',
+          ],
+          'cflags': [
+              '-pthread',
+              '-std=c++0x',
+              '-Wno-invalid-offsetof'
+          ],
+          'libraries': [
+            '-pthread'
+          ],
         }],
         ['OS == "mac"', {
           'defines': [
             'JS_HAVE_MACHINE_ENDIAN_H=1',
             'XP_MACOSX=1',
+            'XP_UNIX=1',
             'DARWIN=1',
           ],
           'conditions': [
@@ -94,6 +106,11 @@
               'xcode_settings': {'ARCHS': ['i386']},
             }],
           ],
+          'xcode_settings': {
+            'CLANG_CXX_LANGUAGE_STANDARD': 'c++0x',
+            'CLANG_CXX_LIBRARY': 'libc++',
+            'GCC_WARN_ABOUT_INVALID_OFFSETOF_MACRO' : 'NO',
+          },
         }],
         ['OS == "win"', {
           'defines': [
@@ -126,6 +143,8 @@
                     # will be default initialized
             '4355', # warning C4355: 'this' : used in base member initializer
                     # list
+            '4624', # warning C4624: 'derived class' : destructor could not be
+                    # generated because a base class destructor is inaccessible
             '4661', # warning C4661: 'identifier' : no suitable definition
                     # provided for explicit template instantiation request
             '4804', # warning C4804: 'operation' : unsafe use of type 'bool'
@@ -140,10 +159,6 @@
               ],
             },
           }
-        }, {
-          'cflags': ['-pthread', '-std=c++0x', '-Wno-invalid-offsetof'],
-          'defines': ['XP_UNIX=1'],
-          'libraries': ['-pthread'],
         }],
       ],
     },
@@ -157,6 +172,15 @@
       'include_dirs': [
         'src/js/shell',
         'src/js/perf',
+      ],
+      'conditions': [
+        ['OS == "win"', {
+          'msvs_settings': {
+            'VCCLCompilerTool': {
+              'ForcedIncludeFiles': [ 'mozilla/Char16.h' ],
+            },
+          },
+        }],
       ],
       'sources': [
         'src/js/shell/js.cpp',
@@ -230,18 +254,21 @@
               'src/js/builtin/Iterator.js',
               'src/js/builtin/Map.js',
               'src/js/builtin/Number.js',
-              'src/js/builtin/ParallelArray.js',
               'src/js/builtin/String.js',
               'src/js/builtin/Set.js',
               'src/js/builtin/TypedObject.js',
             ],
           },
           'conditions': [
+            ['OS == "linux"', {
+              'variables': { 'cpp': 'cpp' }
+            }],
+            ['OS == "mac"', {
+              'variables': { 'cpp': '"gcc -xc -E"' }
+            }],
             ['OS == "win"', {
               'variables': { 'cpp': '"cl -EP"' }
-            }, {
-              'variables': { 'cpp': 'cpp' }
-            }]
+            }],
           ],
           'inputs': [
             '<@(embedjs)',
@@ -295,14 +322,27 @@
           'link_settings': {
             'libraries': [ '-lwinmm.lib', '-lpsapi.lib' ],
           },
+          'msvs_settings': {
+            'VCCLCompilerTool': {
+              'ForcedIncludeFiles': [ 'mozilla/Char16.h' ],
+            },
+          },
           'sources': [
             'src/js/assembler/jit/ExecutableAllocatorWin.cpp',
             'src/js/yarr/OSAllocatorWin.cpp',
+            # JS_THREADSAFE
+            'src/js/threading/windows/ConditionVariable.cpp',
+            'src/js/threading/windows/Mutex.cpp',
+            'src/js/threading/windows/Thread.cpp',
           ],
         }, {
           'sources': [
             'src/js/assembler/jit/ExecutableAllocatorPosix.cpp',
             'src/js/yarr/OSAllocatorPosix.cpp',
+            # JS_THREADSAFE
+            'src/js/threading/posix/ConditionVariable.cpp',
+            'src/js/threading/posix/Mutex.cpp',
+            'src/js/threading/posix/Thread.cpp',
           ],
         }],
 
@@ -321,7 +361,6 @@
             'src/js/jit/shared/BaselineCompiler-x86-shared.cpp',
             'src/js/jit/shared/BaselineIC-x86-shared.cpp',
             'src/js/jit/shared/CodeGenerator-x86-shared.cpp',
-            'src/js/jit/shared/IonFrames-x86-shared.cpp',
             'src/js/jit/shared/Lowering-x86-shared.cpp',
             'src/js/jit/shared/MoveEmitter-x86-shared.cpp',
           ],
@@ -382,9 +421,9 @@
         'src/js/builtin/Intl.cpp',
         'src/js/builtin/MapObject.cpp',
         'src/js/builtin/Object.cpp',
-        'src/js/builtin/ParallelArray.cpp',
         'src/js/builtin/Profilers.cpp',
         'src/js/builtin/RegExp.cpp',
+        'src/js/builtin/SIMD.cpp',
         'src/js/builtin/TestingFunctions.cpp',
         'src/js/builtin/TypeRepresentation.cpp',
         'src/js/builtin/TypedObject.cpp',
@@ -485,6 +524,9 @@
         'src/js/yarr/YarrPattern.cpp',
         'src/js/yarr/YarrSyntaxChecker.cpp',
 
+        # JS_THREADSAFE
+        'src/js/threading/Once.cpp',
+
         # ENABLE_ION
         'src/js/jit/AliasAnalysis.cpp',
         'src/js/jit/AsmJS.cpp',
@@ -513,7 +555,9 @@
         'src/js/jit/IonCaches.cpp',
         'src/js/jit/IonFrames.cpp',
         'src/js/jit/IonMacroAssembler.cpp',
+        'src/js/jit/IonOptimizationLevels.cpp',
         'src/js/jit/IonSpewer.cpp',
+        'src/js/jit/JitOptions.cpp',
         'src/js/jit/JSONSpewer.cpp',
         'src/js/jit/LICM.cpp',
         'src/js/jit/LIR.cpp',
@@ -544,7 +588,7 @@
         # ENABLE_YARR_JIT
         'src/js/yarr/YarrJIT.cpp',
 
-        # msft
+        # mfbt
         'src/mozilla/Compression.cpp',
         'src/mozilla/FloatingPoint.cpp',
         'src/mozilla/HashFunctions.cpp',
