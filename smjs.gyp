@@ -213,6 +213,7 @@
         'src/js/jsapi-tests/testChromeBuffer.cpp',
         'src/js/jsapi-tests/testClassGetter.cpp',
         'src/js/jsapi-tests/testCloneScript.cpp',
+        'src/js/jsapi-tests/testConditionVariable.cpp',
         'src/js/jsapi-tests/testConservativeGC.cpp',
         'src/js/jsapi-tests/testContexts.cpp',
         'src/js/jsapi-tests/testCustomIterator.cpp',
