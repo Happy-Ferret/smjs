@@ -56,7 +56,7 @@ echo manually install gyp into %~dp0build\gyp.
 goto exit
 
 :have_gyp
-call build\gyp\gyp.bat smjs.gyp -f msvs -G msvs_version=2010 --depth=. -Dtarget_arch=%target_arch% -Dlibrary=static_library
+call build\gyp\gyp.bat -Icommon.gypi smjs.gyp -f msvs -G msvs_version=2010 --depth=. -Dtarget_arch=%target_arch% -Dlibrary=static_library
 if errorlevel 1 goto create-msvs-files-failed
 if not exist smjs.sln goto create-msvs-files-failed
 echo Project files generated.

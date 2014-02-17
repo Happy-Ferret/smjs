@@ -2,21 +2,12 @@
   'target_defaults': {
     'default_configuration': 'Release',
 
-    # XXX this should probably be specified in common.gypi
-    'target_conditions': [
-      ['target_arch == "x64"', {
-        'msvs_configuration_platform': 'x64'
-      }]
-    ],
-
     'configurations': {
       'Debug': {
-        'defines': ['DEBUG', 'JS_DEBUG', 'JS_GC_ZEAL'],
-        'cflags': ['-g', '-O0'],
+        'defines': ['JS_DEBUG', 'JS_GC_ZEAL'],
       },
       'Release': {
-        'defines': ['NDEBUG'],
-        'cflags': ['-O3', '-fno-strict-aliasing'],
+        'defines': [],
       },
     },
 
@@ -98,14 +89,6 @@
             'XP_UNIX=1',
             'DARWIN=1',
           ],
-          'conditions': [
-            ['target_arch == "x64"', {
-              'xcode_settings': {'ARCHS': ['x86_64']},
-            }],
-            ['target_arch == "ia32"', {
-              'xcode_settings': {'ARCHS': ['i386']},
-            }],
-          ],
           'xcode_settings': {
             'CLANG_CXX_LANGUAGE_STANDARD': 'c++0x',
             'CLANG_CXX_LIBRARY': 'libc++',
@@ -114,7 +97,6 @@
         }],
         ['OS == "win"', {
           'defines': [
-            'WIN32=1',
             'XP_WIN=1',
             'WIN32_LEAN_AND_MEAN=1',
             'WTF_COMPILER_MSVC=1'
@@ -132,33 +114,39 @@
               ],
             }],
           ],
-          'msvs_cygwin_shell': 0, # don't use bash
           'msvs_disabled_warnings': [
+            '4099', # warning C4099: 'identifier' : type name first seen using
+                    # 'class' now seen using 'struct'
+            '4251', # warning C4251: 'identifier' : class 'type' needs to have
+                    # dll-interface to be used by clients of class 'type2'
+            '4244', # 'conversion' conversion from 'type1' to 'type2', possible
+                    # loss of data
             '4291', # warning C4291: 'declaration' : no matching operator
                     # delete found; memory will not be freed if initialization
                     # throws an exception
             '4305', # warning C4305: 'identifier' : truncation from 'type1' to
                     # 'type2'
+            '4345', # warning C4345: behavior change: an object of POD type
+                    # constructed with an initializer of the form () will be
+                    # default-initialized
             '4351', # warning C4351: new behavior: elements of array 'array'
                     # will be default initialized
             '4355', # warning C4355: 'this' : used in base member initializer
                     # list
+            '4396', # warning C4396: 'name' : the inline specifier cannot be
+                    # used when a friend declaration refers to a specialization
+                    # of a function template
             '4624', # warning C4624: 'derived class' : destructor could not be
                     # generated because a base class destructor is inaccessible
             '4661', # warning C4661: 'identifier' : no suitable definition
                     # provided for explicit template instantiation request
+            '4800', # 'type' : forcing value to bool 'true' or 'false'
+                    # (performance warning)
             '4804', # warning C4804: 'operation' : unsafe use of type 'bool'
                     # in operation
             '4805', # warning C4805: 'operation' : unsafe mix of type 'bool'
                     # and type 'type' in operation
           ],
-          'msvs_settings': {
-            'VCCLCompilerTool': {
-              'AdditionalOptions': [
-                '/MP', # compile across multiple CPUs
-              ],
-            },
-          }
         }],
       ],
     },
@@ -272,7 +260,7 @@
     {
       'target_name': 'jskwgen',
       'type': 'executable',
-      'sources': ['src//js/jskwgen.cpp'],
+      'sources': ['src/js/jskwgen.cpp'],
     },
 
     {
