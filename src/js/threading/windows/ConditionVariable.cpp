@@ -33,7 +33,7 @@
 
 namespace js {
 
-static const uint64_t USEC_PER_MSEC = 1000000;
+static const uint64_t USEC_PER_MSEC = 1000;
 
 
 // Windows XP and Server 2003 don't support condition variables natively. The
@@ -108,7 +108,9 @@ struct ConditionVariableNative {
     }
 
     inline bool wait(CRITICAL_SECTION* cs, DWORD msec) {
-        return nativeImports.SleepConditionVariableCS(&cv_, cs, msec);
+        BOOL r = nativeImports.SleepConditionVariableCS(&cv_, cs, msec);
+        assert(r || GetLastError() == ERROR_TIMEOUT);
+        return r;
     }
 
   private:
@@ -280,11 +282,12 @@ struct ConditionVariableFallback {
                    sleepersCount == 0) {
             // In theory a race condition is possible where the last sleeper
             // times out right at the moment that another thread signals it.
-            // If that just happened we now have a dangling signal event and
-            // mode, but no threads to be woken up by it, and we need to clean
-            // that up.
-            BOOL success = ResetEvent(wakeOneEvent_);
-            assert(success);
+            // If that just happened we now either have a dangling wake-one
+            // event, or the wake-one event becomes signaled after this thread
+            // yields. So we need to "consume" the event and then strip the
+            // wakeup mode bit sleepersCountAndWakeupMode_.
+            DWORD waitResult2 = WaitForSingleObject(wakeOneEvent_, INFINITE);
+            assert(waitResult2 == WAIT_OBJECT_0);
 
             // This is safe - we are certain there are no other sleepers that
             // could wake up right now, and the semaphore ensures that no
@@ -297,23 +300,39 @@ struct ConditionVariableFallback {
             // sleeping threads left this thread will do it instead.
             releaseSleepWakeupSemaphore = true;
 
-        } else if (wakeupMode == WAKEUP_MODE_ALL &&
+        } else if (waitResult == WAIT_OBJECT_0 + 1 &&
+                   wakeupMode == WAKEUP_MODE_ALL &&
                    sleepersCount == 0) {
             // If this was the last thread waking up in response to a
             // broadcast, clear the wakeup mode and reset the wake-all event.
-            // A race condition similar to the case described above could
-            // occur, so waitResult could be WAIT_TIMEOUT, but that doesn't
-            // matter for the actions that need to be taken.
-            assert(waitResult = WAIT_OBJECT_0  + 1 ||
-                   waitResult == WAIT_TIMEOUT);
+            BOOL success = ResetEvent(wakeAllEvent_);
+            assert(success);
 
+            // Clear the wakeup mode bit.
+            sleepersCountAndWakeupMode_ = 0 | WAKEUP_MODE_NONE;
+
+            // The broadcasting thread has acquired the enter-wakeup semaphore
+            // and expects the last thread that wakes up to release it.
+            releaseSleepWakeupSemaphore = true;
+
+        } else if (waitResult == WAIT_TIMEOUT &&
+                   wakeupMode == WAKEUP_MODE_ALL &&
+                   sleepersCount == 0) {
+            // The last sleeping thread just timed out, but at the same time
+            // another thread is trying to wake us by setting the wake-all
+            // event. This case is very similar to the case above, except that
+            // we need to be careful *not* to reset the wake-all event *before*
+            // the broadcasting thread sets it. Therefore we're going to wait
+            // for the wake-all event first, and then proceed as if we were
+            // woken up by the wake-all event.
+            DWORD waitResult2 = WaitForSingleObject(wakeAllEvent_, INFINITE);
+            assert(waitResult2 == WAIT_OBJECT_0);
+            
             BOOL success = ResetEvent(wakeAllEvent_);
             assert(success);
 
             sleepersCountAndWakeupMode_ = 0 | WAKEUP_MODE_NONE;
 
-            // The broadcasting thread has acquired the enter-wakeup semaphore
-            // and expects the last thread that wakes up to release it.
             releaseSleepWakeupSemaphore = true;
 
         } else if ((waitResult == WAIT_TIMEOUT && msec != INFINITE) ||
